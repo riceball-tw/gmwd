@@ -155,6 +155,8 @@ func (s *Store) AddTopic(ctx context.Context, t topic.Topic) (topic.Topic, error
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = time.Now()
 	}
+	// Return exactly what a later read will give back.
+	t.CreatedAt = fromMS(ms(t.CreatedAt))
 	if t.Status == "" {
 		t.Status = topic.Queued
 	}

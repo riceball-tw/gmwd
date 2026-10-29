@@ -273,3 +273,17 @@ func TestSettings(t *testing.T) {
 		t.Errorf("invalid save changed settings: %+v", got)
 	}
 }
+
+func TestAddTopicReturnsStoredValues(t *testing.T) {
+	s, _ := open(t)
+	tp := research("prec", 3)
+	tp.CreatedAt = time.Date(2026, 10, 29, 12, 0, 0, 123456789, time.UTC)
+	added, err := s.AddTopic(ctx, tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetTopic(ctx, "prec")
+	if !added.CreatedAt.Equal(got.CreatedAt) {
+		t.Errorf("added %v, stored %v", added.CreatedAt, got.CreatedAt)
+	}
+}
