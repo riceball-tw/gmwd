@@ -111,6 +111,10 @@ func printStatus(out io.Writer, rep statusReport, now time.Time) {
 		fmt.Fprintf(out, "Daemon: running (pid %d, up %s), %s — %s\n", d.PID, round(now.Sub(d.StartedAt)), state, d.Reason)
 		fmt.Fprintf(out, "  max burn %.0f%% of the week, reserve %.0f%% of each 5h window\n", d.Settings.MaxBurnPct, d.Settings.ReservePct)
 		fmt.Fprintf(out, "  topics: %s\n", topicCounts(d.Topics))
+		if j := d.Job; j != nil {
+			fmt.Fprintf(out, "  job: %s, iteration %d, %s tokens, running %s\n", j.TopicID, j.Iteration,
+				tokens(j.Tokens.Input+j.Tokens.Output+j.Tokens.CacheCreate), round(now.Sub(j.StartedAt)))
+		}
 		fmt.Fprintln(out)
 	} else {
 		fmt.Fprintln(out, "Daemon: not running (gmwd install, or gmwd daemon)")

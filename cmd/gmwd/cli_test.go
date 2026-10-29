@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,4 +332,65 @@ func TestParseArgsAllowsFlagsAfterPositionals(t *testing.T) {
 	if _, err := parseArgs(newFlags("y"), []string{"a", "--nope"}); err == nil {
 		t.Error("unknown flag after positional accepted")
 	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the daemon's goroutines.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestDaemonRunsQueuedTopicsByItself(t *testing.T) {
+	env(t)
+	var log syncBuffer
+	d, err := newDaemon(&log, time.Hour, time.Hour, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("daemon: %v", err)
+		}
+	})
+	if _, err := waitForDaemon(10 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// $HOME is empty, so there's no Claude Code activity: the user is idle.
+	mustRun(t, "add", "--kind", "research", "--title", "Auto topic", "--prompt", "p")
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(mustRun(t, "ls"), "done") {
+		if time.Now().After(deadline) {
+			t.Fatalf("topic never ran; daemon log:\n%s", log.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	contains(t, "daemon log", log.String(), "pacer: running auto-topic: budget", "starting auto-topic (research)", "finished auto-topic: done after 1 iterations", "pacer: idle: no queued topics")
+	contains(t, "status", mustRun(t, "status"), "idle: no queued topics")
+
+	// With Claude Code in use, it waits instead.
+	home := os.Getenv("HOME")
+	logDir := filepath.Join(home, ".claude", "projects", "p")
+	os.MkdirAll(logDir, 0o700)
+	line := fmt.Sprintf(`{"type":"user","entrypoint":"cli","timestamp":%q}`+"\n", time.Now().UTC().Format(time.RFC3339Nano))
+	os.WriteFile(filepath.Join(logDir, "s.jsonl"), []byte(line), 0o600)
+	mustRun(t, "add", "--kind", "research", "--title", "Later", "--prompt", "p")
+	deadline = time.Now().Add(10 * time.Second)
+	for !strings.Contains(log.String(), "pacer: waiting: user active: Claude Code used") {
+		if time.Now().After(deadline) {
+			t.Fatalf("didn't wait for the user; log:\n%s", log.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	contains(t, "ls", mustRun(t, "ls"), "later", "queued")
 }
