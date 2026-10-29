@@ -190,3 +190,56 @@ func TestPartialUsageFromJobIsMerged(t *testing.T) {
 		return strings.HasPrefix(st.Reason, "rate limited until")
 	})
 }
+
+// A topic added before the first usage reading must start as soon as the
+// reading arrives, not at the next (hourly here) tick.
+func TestUsageReadingWakesScheduler(t *testing.T) {
+	home := shortHome(t)
+	release := make(chan struct{})
+	slow := &gatedProber{gate: release, inner: &fakeProber{snaps: []float64{0.10}}}
+	ran := make(chan struct{}, 1)
+	d := &Daemon{Home: home, Prober: slow, PollInterval: time.Hour, Activity: idle{}, TickInterval: time.Hour, Logf: t.Logf,
+		Runner: func(ctx context.Context, tp topic.Topic, o runner.Options) (runner.Summary, error) {
+			ran <- struct{}{}
+			return runner.Summary{TopicID: tp.ID, StopReason: runner.StopDone, TopicStatus: topic.Done}, nil
+		}}
+	rctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(rctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	eventually(t, "socket", func() bool {
+		c, err := rpc.Dial(filepath.Join(home, "gmwd.sock"))
+		if err == nil {
+			c.Close()
+		}
+		return err == nil
+	})
+	c := client(t, home)
+	c.Call(ctx, rpc.MethodTopicAdd, rpc.TopicParams{Topic: topic.Topic{ID: "early", Kind: topic.Research, Prompt: "p"}}, nil)
+	var st rpc.StatusResult
+	eventually(t, "waiting for usage", func() bool {
+		st = rpc.StatusResult{}
+		c.Call(ctx, rpc.MethodStatus, nil, &st)
+		return st.Reason == "waiting: usage not known yet"
+	})
+	close(release)
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("topic didn't start when usage arrived")
+	}
+}
+
+type gatedProber struct {
+	gate  chan struct{}
+	inner Prober
+}
+
+func (g *gatedProber) Probe(ctx context.Context) (usage.Snapshot, error) {
+	select {
+	case <-g.gate:
+	case <-ctx.Done():
+		return usage.Snapshot{}, ctx.Err()
+	}
+	return g.inner.Probe(ctx)
+}

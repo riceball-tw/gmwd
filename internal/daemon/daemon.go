@@ -143,6 +143,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	return err
 }
 
+// Notify pushes an event to subscribed clients (e.g. job log lines).
+func (d *Daemon) Notify(ev rpc.Event) {
+	if d.srv != nil {
+		d.srv.Notify(ev)
+	}
+}
+
 // wake asks the scheduler to reconsider now.
 func (d *Daemon) wake() {
 	if d.sched != nil {
@@ -244,6 +251,7 @@ func (d *Daemon) ObserveUsage(ctx context.Context, snap usage.Snapshot) {
 	d.usage, d.usageErr = &snap, ""
 	d.mu.Unlock()
 	d.srv.Notify(rpc.Event{Type: rpc.EventUsage, Usage: &snap})
+	d.wake() // a new reading can change the pacer's answer
 }
 
 func (d *Daemon) register() {
