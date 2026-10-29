@@ -116,10 +116,16 @@ Ticks every 60s (and on usage/activity events):
 3. Hand it to the runner with the budget.
 
 ### 4.8 Digest (`internal/digest`)
-Written to `~/.gmwd/digest/YYYY-MM-DD.md` and shown in the TUI:
-- per topic: what was done, tokens spent, branch / report link, check status;
-- total burned vs. quota that would have expired unused.
-Optional macOS notification (`osascript`) when a digest is ready.
+Rewritten to `~/.gmwd/digest/YYYY-MM-DD.md` after every run (scheduled or `gmwd run`), shown by `gmwd digest` and the TUI's Digest screen:
+- totals for the day: runs, iterations, tokens, share of 5h windows and of the week;
+- **To review**: new commits on a `gmwd/*` branch (with the `git log` command to see them), finished/updated reports, failed topics;
+- per topic: how each run stopped, branch stats vs. the default branch, latest note.
+Optional macOS notification (`osascript`, setting `notify`, off by default) when a run leaves something to review.
+
+### 4.9 Calibration (`internal/calib`)
+Claude Code reports utilization directly, so caps are never estimated in tokens. What is calibrated is how gmwd's measures relate:
+- weekly points per 5h point (pacer ratio) from usage readings in the same windows; rate-limited readings are skipped (they may carry only one window);
+- tokens per 5h point per model, from finished runs of the last 14 days, used to show what the slider means in tokens.
 
 ## 5. TUI (Bubble Tea)
 
@@ -176,7 +182,7 @@ gmwd/
 | 3 | Daemon + store + socket | Daemon runs, CLI `add/ls/pause` work over the socket, launchd install works. |
 | 4 | Pacer + activity + scheduler | Daemon auto-runs topics only when idle and within budget; logs pacer reasons. |
 | 5 | TUI | Dashboard with slider, topics CRUD, live job log. |
-| 6 | Digest + calibration | Daily digest; cap estimates improve after limit hits. |
+| 6 | Digest + calibration | Daily digest; ratio and tokens-per-point estimates learned from usage and runs (rate-limited readings can't skew them). |
 | 7 | (later) Claude Code mod | `/backlog add` + status line segment that read/write through the CLI. |
 
 ## 9. Open questions
