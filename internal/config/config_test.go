@@ -13,7 +13,15 @@ func TestSettingsValidate(t *testing.T) {
 	if err := DefaultSettings().Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []Settings{{MaxBurnPct: 101}, {MaxBurnPct: -1}, {MaxBurnPct: 50, ReservePct: 120}} {
+	bad := func(f func(*Settings)) Settings { s := DefaultSettings(); f(&s); return s }
+	for _, s := range []Settings{
+		bad(func(s *Settings) { s.MaxBurnPct = 101 }),
+		bad(func(s *Settings) { s.MaxBurnPct = -1 }),
+		bad(func(s *Settings) { s.ReservePct = 120 }),
+		bad(func(s *Settings) { s.IdleMode = "sometimes" }),
+		bad(func(s *Settings) { s.IdleMode = "" }),
+		bad(func(s *Settings) { s.QuietMinutes = -1 }),
+	} {
 		if s.Validate() == nil {
 			t.Errorf("%+v accepted", s)
 		}

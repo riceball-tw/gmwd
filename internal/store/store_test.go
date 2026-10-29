@@ -259,7 +259,8 @@ func TestSettings(t *testing.T) {
 	if err != nil || got != config.DefaultSettings() {
 		t.Fatalf("defaults = %+v, %v", got, err)
 	}
-	want := config.Settings{Paused: true, MaxBurnPct: 70, ReservePct: 20}
+	want := config.DefaultSettings()
+	want.Paused, want.MaxBurnPct, want.ReservePct, want.IdleMode, want.QuietMinutes = true, 70, 20, config.IdleAway, 30
 	if err := s.SaveSettings(ctx, want); err != nil {
 		t.Fatal(err)
 	}
@@ -285,5 +286,20 @@ func TestAddTopicReturnsStoredValues(t *testing.T) {
 	got, _ := s.GetTopic(ctx, "prec")
 	if !added.CreatedAt.Equal(got.CreatedAt) {
 		t.Errorf("added %v, stored %v", added.CreatedAt, got.CreatedAt)
+	}
+}
+
+func TestSettingsFromOlderVersionGetNewDefaults(t *testing.T) {
+	s, _ := open(t)
+	// Settings saved before idle settings existed.
+	if _, err := s.db.Exec(`INSERT INTO settings (id, json) VALUES (1, '{"paused":true,"maxBurnPct":60,"reservePct":10}')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Paused || got.MaxBurnPct != 60 || got.IdleMode != config.IdleNotUsingClaude || got.QuietMinutes != 10 {
+		t.Errorf("got %+v", got)
 	}
 }

@@ -364,3 +364,11 @@ func TestSettingsPatchApply(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+func TestSettingsPatchIdleFields(t *testing.T) {
+	mode, quiet := config.IdleAway, 0
+	got := SettingsPatch{IdleMode: &mode, QuietMinutes: &quiet}.Apply(config.DefaultSettings())
+	if got.IdleMode != config.IdleAway || got.QuietMinutes != 0 || got.MaxBurnPct != 90 {
+		t.Errorf("got %+v", got)
+	}
+}

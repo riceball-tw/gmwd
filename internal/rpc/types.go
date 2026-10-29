@@ -71,9 +71,11 @@ type TopicsResult struct {
 
 // SettingsPatch changes only the fields that are set.
 type SettingsPatch struct {
-	Paused     *bool    `json:"paused,omitempty"`
-	MaxBurnPct *float64 `json:"maxBurnPct,omitempty"`
-	ReservePct *float64 `json:"reservePct,omitempty"`
+	Paused       *bool            `json:"paused,omitempty"`
+	MaxBurnPct   *float64         `json:"maxBurnPct,omitempty"`
+	ReservePct   *float64         `json:"reservePct,omitempty"`
+	IdleMode     *config.IdleMode `json:"idleMode,omitempty"`
+	QuietMinutes *int             `json:"quietMinutes,omitempty"`
 }
 
 // Apply returns s with the patch applied.
@@ -86,6 +88,12 @@ func (p SettingsPatch) Apply(s config.Settings) config.Settings {
 	}
 	if p.ReservePct != nil {
 		s.ReservePct = *p.ReservePct
+	}
+	if p.IdleMode != nil {
+		s.IdleMode = *p.IdleMode
+	}
+	if p.QuietMinutes != nil {
+		s.QuietMinutes = *p.QuietMinutes
 	}
 	return s
 }
