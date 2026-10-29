@@ -162,3 +162,18 @@ func TestEstimateRatio(t *testing.T) {
 		t.Errorf("clamp: %v", got)
 	}
 }
+
+func TestEstimateRatioSkipsRejectedReadings(t *testing.T) {
+	r5, r7 := now.Add(time.Hour), now.Add(48*time.Hour)
+	rejected := snap(now.Add(20*time.Minute), 1.0, 0.35, r5, r7) // weekly copied from the last reading
+	rejected.Status = "rejected"
+	samples := []usage.Snapshot{
+		snap(now, 0.10, 0.30, r5, r7),
+		snap(now.Add(10*time.Minute), 0.35, 0.35, r5, r7),
+		rejected,
+	}
+	got := EstimateRatioDetail(samples)
+	if !got.FromData || !near(got.Ratio, 0.2) || !near(got.WindowPoints, 0.25) {
+		t.Errorf("got %+v, want ratio 0.2 from 0.25 points (the rejected reading ignored)", got)
+	}
+}

@@ -136,12 +136,36 @@ func Decide(in Input) Decision {
 	}
 }
 
+// RatioEstimate is the weekly-per-5h ratio and what it rests on.
+type RatioEstimate struct {
+	Ratio float64 `json:"ratio"`
+	// WindowPoints is how much 5h movement (0..1 per point) it was
+	// measured over; below minRatioPoints the default is used.
+	WindowPoints float64 `json:"windowPoints"`
+	FromData     bool    `json:"fromData"`
+}
+
+const minRatioPoints = 0.2
+
 // EstimateRatio estimates weekly points per 5h point from usage samples
 // taken inside the same 5h and weekly windows. It returns DefaultRatio
-// until at least minWindowPoints of 5h movement has been seen.
-func EstimateRatio(samples []usage.Snapshot) float64 {
-	const minWindowPoints = 0.2
-	sorted := append([]usage.Snapshot(nil), samples...)
+// until at least minRatioPoints of 5h movement has been seen.
+func EstimateRatio(samples []usage.Snapshot) float64 { return EstimateRatioDetail(samples).Ratio }
+
+// EstimateRatioDetail is EstimateRatio with its basis.
+//
+// Rejected readings are skipped: a rate-limit event may carry only the 5h
+// window (the weekly value is then the last known one), so pairing it with
+// the reading before would look like 5h movement without weekly movement
+// and drag the ratio down, which would make budgets too big right after a
+// limit hit.
+func EstimateRatioDetail(samples []usage.Snapshot) RatioEstimate {
+	sorted := make([]usage.Snapshot, 0, len(samples))
+	for _, s := range samples {
+		if s.Status != "rejected" {
+			sorted = append(sorted, s)
+		}
+	}
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].FiveHour.ObservedAt.Before(sorted[j].FiveHour.ObservedAt)
 	})
@@ -159,10 +183,10 @@ func EstimateRatio(samples []usage.Snapshot) float64 {
 		d5 += x5
 		d7 += x7
 	}
-	if d5 < minWindowPoints {
-		return DefaultRatio
+	if d5 < minRatioPoints {
+		return RatioEstimate{Ratio: DefaultRatio, WindowPoints: d5}
 	}
-	return clamp(d7/d5, 0.02, 1)
+	return RatioEstimate{Ratio: clamp(d7/d5, 0.02, 1), WindowPoints: d5, FromData: true}
 }
 
 func clamp(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
