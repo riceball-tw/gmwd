@@ -53,26 +53,27 @@ Claude subscriptions have a rolling **5-hour window** and a **weekly cap**. Most
 ### 4.1 Usage sensor (`internal/usage`)
 Answers: *how much has been used in the current 5h window and this week, and when does each reset?*
 
-Sources, in order of trust:
-1. **Rate-limit events** from `claude -p --output-format stream-json` (gnhf reads reset times from these). Gives exact reset time when a limit is hit.
-2. **Claude Code session logs** `~/.claude/projects/**/*.jsonl`: per-message token usage (input, output, cache read/write) with timestamps and model. Sum per window — ccusage does this; reuse the approach. Watched with fsnotify; includes the user's own sessions, which is what we want.
-3. **Calibration**: limits aren't published in tokens. Each time a limit is hit, record the window's weighted usage → estimate the cap. Until calibrated, fall back to a configurable plan default (Pro / Max 5x / Max 20x) and be conservative.
+Claude Code reports quota directly (see `docs/spike.md`), so usage is read, not estimated. Sources, in order of trust:
+1. **`rate_limit_event`** from `claude -p --output-format stream-json --verbose`: emitted on every call, not only on a limit hit. `unifiedWindows.{five_hour,seven_day}.{utilization,resetsAt}` gives the used share of each cap (0..1, two decimals) and the exact reset time. Free byproduct of every job iteration.
+2. **`claude -p /usage`**: costs no quota (no model call), ~3 s. Integer percent and minute-precision reset times for both windows (reset rounded to the nearest 10 min). The daemon polls this while no job is running.
+3. **Claude Code session logs** `~/.claude/projects/**/*.jsonl` (subagent logs included, deduped on `message.id`+`requestId`): token counts per model. Fallback only — they miss claude.ai and other devices. Also used for idle detection (`entrypoint: "cli"` = interactive) and to read logged rate-limit hits.
 
-Token weighting: models count differently against limits (Opus > Sonnet; cache reads are cheap). Keep a configurable weight table; refine via calibration.
+Usage is tracked as **percent of cap**. Tokens are still counted per job (from `result.usage`) for per-job caps and the digest, and the observed %-per-token ratio is kept to turn a % budget into a token estimate for display. No calibration of caps in tokens is needed.
 
-> **To verify early (spike):** exact fields in the JSONL logs and stream-json rate-limit events in the current Claude Code version; whether Claude Code exposes remaining-quota data anywhere directly (status line input, `/usage`). If a direct source exists, prefer it over estimation.
+Window anchoring: a 5h window starts at the first request after the previous one expired, floored to 10 min; the weekly reset is a fixed, hour-aligned anchor. When no 5h window is active, gmwd's first request opens one.
 
 ### 4.2 Pacer (`internal/pacer`)
 Turns usage + the slider into a **burn budget** right now.
 
-Inputs: estimated used/remaining for the 5h window and the week, time to each reset, slider setting, reserve, user activity.
+Inputs: utilization (percent of cap) of the 5h window and the week, time to each reset, slider setting, reserve, user activity.
 
-Logic (v0):
-- **Weekly is the binding constraint.** Target: weekly usage reaches `slider%` of the cap by weekly reset — no more.
-- Per 5h window: allowed burn = min(remaining in window − reserve, weekly budget spread over windows left until weekly reset).
+Logic (v0), all in percent of cap:
+- **Weekly is the binding constraint.** Target: weekly utilization reaches `slider%` by weekly reset — no more.
+- Per 5h window: allowed burn = min(window headroom − reserve, weekly budget spread over windows left until weekly reset).
 - **Use-it-or-lose-it boost**: as a window nears reset with unused headroom, raise its allowance (up to the weekly target), since that quota expires anyway.
 - **Reserve**: always leave `reserve%` of the current window for the user (default 15%).
-- Output: `{canRun bool, tokenBudget int, reason string}` — the reason is shown in the TUI ("waiting: user active", "budget 120k until 14:30 reset").
+- Live check: during a job, every iteration's `rate_limit_event` updates utilization, so the pacer re-checks between iterations against real numbers.
+- Output: `{canRun bool, budgetPct float, tokenEstimate int, reason string}` — the reason is shown in the TUI ("waiting: user active", "budget 12% of window until 14:30 reset").
 
 ### 4.3 Usage slider (UX)
 One number: **max burn %** — the share of the weekly cap gmwd may bring total usage up to (e.g. 90% means "fill my week to 90%, leave the last 10% untouched").
@@ -92,6 +93,7 @@ Topic {
   prompt          // what to research / what to fix
   repo            // solve: path to git repo; research: optional context dir
   priority        // 1..5
+  model           // sonnet (default) | opus
   maxTokens       // per-topic cap (optional)
   doneWhen        // optional natural-language stop condition
   status          // queued | running | paused | done | failed
@@ -179,7 +181,7 @@ gmwd/
 
 ## 9. Open questions
 
-- Is there a reliable direct source for remaining quota, or is estimation from logs the only option? (Spike.)
-- How do the 5h window boundaries work exactly — from the first message or fixed? Affects reset prediction.
-- Default model for gmwd jobs: Sonnet (cheaper against limits, more iterations) vs. Opus (better quality)? Probably configurable per topic, default Sonnet.
+- ~~Direct source for remaining quota?~~ Yes: `rate_limit_event` and `/usage` (§4.1).
+- ~~5h window boundaries?~~ First request after expiry, floored to 10 min (§4.1).
+- ~~Default model?~~ Sonnet; Opus selectable per topic.
 - Should research topics be able to spawn solve topics (e.g. "research X" → "now implement")? Probably later; keep a human in the loop for v0.
