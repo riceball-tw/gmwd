@@ -24,10 +24,11 @@ const (
 	tabDashboard tab = iota
 	tabTopics
 	tabJobs
+	tabDigest
 	tabCount
 )
 
-var tabNames = [...]string{"Dashboard", "Topics", "Jobs"}
+var tabNames = [...]string{"Dashboard", "Topics", "Jobs", "Digest"}
 
 // refreshEvery re-reads status so countdowns and the pacer's reason stay
 // current; everything else arrives as events.
@@ -41,6 +42,7 @@ type (
 	statusMsg       rpc.StatusResult
 	topicsMsg       []topic.Topic
 	runsMsg         []store.Run
+	digestMsg       rpc.DigestResult
 	settingsMsg     config.Settings
 	eventMsg        rpc.Event
 	errMsg          struct{ err error }
@@ -74,6 +76,11 @@ type Model struct {
 	topicTable table.Model
 	runTable   table.Model
 	logView    viewport.Model
+	digestView viewport.Model
+
+	// Digest tab state.
+	digest     rpc.DigestResult
+	digestDate string // "" = today
 
 	// Topics tab state.
 	details       bool
@@ -88,6 +95,7 @@ func New(c Client) Model {
 	m.topicTable = table.New(table.WithColumns(topicColumns(m.width)), table.WithFocused(true))
 	m.runTable = table.New(table.WithColumns(runColumns(m.width)))
 	m.logView = viewport.New(m.width, 10)
+	m.digestView = viewport.New(m.width, 10)
 	m.resize()
 	return m
 }
@@ -159,6 +167,16 @@ func (m Model) loadRuns() tea.Cmd {
 	}
 }
 
+func (m Model) loadDigest(date string) tea.Cmd {
+	return func() tea.Msg {
+		var res rpc.DigestResult
+		if err := m.call(rpc.MethodDigest, rpc.DigestParams{Date: date}, &res); err != nil {
+			return errMsg{err}
+		}
+		return digestMsg(res)
+	}
+}
+
 func (m Model) updateSettings(p rpc.SettingsPatch) tea.Cmd {
 	return func() tea.Msg {
 		var s config.Settings
@@ -208,6 +226,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case settingsMsg:
 		m.status.Settings = config.Settings(msg)
 		return m, nil
+	case digestMsg:
+		m.digest = rpc.DigestResult(msg)
+		m.digestView.SetContent(renderMarkdown(m.digest.Markdown, m.width))
+		m.digestView.GotoTop()
+		return m, nil
 	case errMsg:
 		m.err = msg.err
 		return m, nil
@@ -243,7 +266,7 @@ func (m *Model) applyEvent(ev rpc.Event) tea.Cmd {
 	case rpc.EventJob:
 		m.status.Job = ev.Job
 		if ev.Job == nil {
-			return tea.Batch(m.loadRuns(), m.loadStatus())
+			return tea.Batch(m.loadRuns(), m.loadStatus(), m.loadDigest(m.digestDate))
 		}
 	case rpc.EventLog:
 		line := ev.At.Local().Format("15:04:05") + "  " + ev.Log
@@ -275,14 +298,11 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "tab":
-		m.tab = (m.tab + 1) % tabCount
-		return m, nil
+		return m.switchTab((m.tab + 1) % tabCount)
 	case "shift+tab":
-		m.tab = (m.tab + tabCount - 1) % tabCount
-		return m, nil
-	case "1", "2", "3":
-		m.tab = tab(key[0] - '1')
-		return m, nil
+		return m.switchTab((m.tab + tabCount - 1) % tabCount)
+	case "1", "2", "3", "4":
+		return m.switchTab(tab(key[0] - '1'))
 	case "?":
 		m.showHelp = !m.showHelp
 		return m, nil
@@ -299,6 +319,16 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.topicsKey(k)
 	case tabJobs:
 		return m.jobsKey(k)
+	case tabDigest:
+		return m.digestKey(k)
+	}
+	return m, nil
+}
+
+func (m Model) switchTab(t tab) (tea.Model, tea.Cmd) {
+	m.tab = t
+	if t == tabDigest {
+		return m, m.loadDigest(m.digestDate)
 	}
 	return m, nil
 }
@@ -316,6 +346,8 @@ func (m *Model) resize() {
 	m.runTable.SetHeight(runsH)
 	m.logView.Width = m.width
 	m.logView.Height = max(body-runsH-5, 3)
+	m.digestView.Width = m.width
+	m.digestView.Height = max(body-2, 3)
 }
 
 func (m Model) View() string {
@@ -332,6 +364,8 @@ func (m Model) View() string {
 			b.WriteString(m.topicsView())
 		case tabJobs:
 			b.WriteString(m.jobsView())
+		case tabDigest:
+			b.WriteString(m.digestScreen())
 		}
 	}
 	body := b.String()
@@ -408,16 +442,19 @@ func (m Model) helpLine() string {
 		return "a add · e edit · d delete · p pause · +/- priority · enter details · " + common
 	case tabJobs:
 		return "↑/↓ runs · pgup/pgdn log · " + common
+	case tabDigest:
+		return "←/→ day · ↑/↓ scroll · " + common
 	}
 	return common
 }
 
 func (m Model) fullHelp() string {
 	return strings.Join([]string{
-		"Global:     tab/shift+tab or 1-3 switch screen · space pause/resume gmwd · r reload · q quit (the daemon keeps running)",
+		"Global:     tab/shift+tab or 1-4 switch screen · space pause/resume gmwd · r reload · q quit (the daemon keeps running)",
 		"Dashboard:  ←/→ change max burn by 5% (how full gmwd may fill your week)",
 		"Topics:     a add · e edit · d delete · p pause/resume topic · +/- priority · enter show details · ↑/↓ select",
 		"Jobs:       ↑/↓ select a run · pgup/pgdn scroll the live log",
+		"Digest:     ←/→ previous/next day · ↑/↓ pgup/pgdn scroll",
 	}, "\n")
 }
 

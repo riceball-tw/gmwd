@@ -90,6 +90,17 @@ func (m Model) dashboardView() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(row("Topics", topicCounts(st)))
+	if c := st.Calibration; c != nil {
+		basis := "default until gmwd has seen more usage"
+		if c.Ratio.FromData {
+			basis = fmt.Sprintf("measured over %.0f points", c.Ratio.WindowPoints*100)
+		}
+		b.WriteString("\n")
+		b.WriteString(row("Calibration", dimStyle.Render(fmt.Sprintf("1 point of 5h ≈ %.2f of the week (%s)", c.Ratio.Ratio, basis))))
+		if c.LimitHits > 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf(" · %d rate-limit hits this week", c.LimitHits)))
+		}
+	}
 	return b.String()
 }
 
@@ -111,7 +122,14 @@ func (m Model) sliderNote() string {
 	if left <= 0 {
 		return fmt.Sprintf("week already at %.0f%%: gmwd waits for the weekly reset", u.SevenDay.Utilization*100)
 	}
-	return fmt.Sprintf("gmwd may fill your week up to %.0f%% · %.0f points left to use", pct, left)
+	note := fmt.Sprintf("gmwd may fill your week up to %.0f%% · %.0f points left to use", pct, left)
+	// With a measured token rate, say roughly what that buys.
+	if c := m.status.Calibration; c != nil && c.Ratio.Ratio > 0 {
+		if r, ok := c.Rate("sonnet"); ok {
+			note += fmt.Sprintf(" (≈ %s sonnet tokens)", tokens(int64(left/c.Ratio.Ratio*r.TokensPerPoint)))
+		}
+	}
+	return note
 }
 
 // windowBar shows 5h usage with the user's reserve shaded at the end.

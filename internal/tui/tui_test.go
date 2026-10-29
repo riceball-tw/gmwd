@@ -15,7 +15,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"gmwd/internal/calib"
 	"gmwd/internal/config"
+	"gmwd/internal/pacer"
 	"gmwd/internal/rpc"
 	"gmwd/internal/store"
 	"gmwd/internal/topic"
@@ -83,6 +85,15 @@ func (f *fakeClient) Call(_ context.Context, method string, params, result any) 
 			f.settings = p.Apply(f.settings)
 		}
 		res = f.settings
+	case rpc.MethodDigest:
+		var p rpc.DigestParams
+		json.Unmarshal(raw, &p)
+		date := p.Date
+		if date == "" {
+			date = "2026-10-29"
+		}
+		res = rpc.DigestResult{Date: date, Days: []string{"2026-10-29", "2026-10-28"},
+			Markdown: "# gmwd digest — " + date + "\n\n## To review\n\n- **Fix flaky auth tests** (solve) — 1 new commit on `gmwd/fix-auth`\n\n### Fix · `fix-auth` · queued\n\n- latest note:\n\n  > Added func A.\n"}
 	case rpc.MethodTopicAdd:
 		var p rpc.TopicParams
 		json.Unmarshal(raw, &p)
@@ -441,7 +452,7 @@ func TestLayoutFitsWindow(t *testing.T) {
 		f := newFake()
 		f.events <- rpc.Event{Type: rpc.EventLog, At: now, Log: strings.Repeat("long log line ", 30)}
 		d := start(t, f, size[0], size[1])
-		for _, tabKey := range []string{"1", "2", "3"} {
+		for _, tabKey := range []string{"1", "2", "3", "4"} {
 			d.keys(tabKey)
 			view := d.m.View()
 			lines := strings.Split(view, "\n")
@@ -477,4 +488,43 @@ func TestValidateRepo(t *testing.T) {
 			t.Errorf("validateRepo(%q, %s) = %v", c.path, c.kind, err)
 		}
 	}
+}
+
+func TestDigestTab(t *testing.T) {
+	f := newFake()
+	d := start(t, f, 100, 30)
+	d.keys("4")
+	has(t, d.view(), "4 Digest", "gmwd digest — 2026-10-29", "To review", "Fix flaky auth tests (solve) — 1 new commit on gmwd/fix-auth", "│ Added func A.", "←/→ day")
+	if v := d.view(); strings.Contains(v, "**") || strings.Contains(v, "`") {
+		t.Errorf("markdown markers left in:\n%s", v)
+	}
+	d.keys("left")
+	has(t, d.view(), "gmwd digest — 2026-10-28")
+	d.keys("left") // no older day
+	d.keys("right")
+	has(t, d.view(), "gmwd digest — 2026-10-29")
+	got := f.callsTo(rpc.MethodDigest)
+	want := []string{`{}`, `{"date":"2026-10-28"}`, `{"date":"2026-10-29"}`}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("digest calls = %v, want %v", got, want)
+	}
+	// A finished job refreshes the shown day.
+	f.events <- rpc.Event{Type: rpc.EventJob}
+	d.settle()
+	if n := len(f.callsTo(rpc.MethodDigest)); n != 4 {
+		t.Errorf("digest not reloaded after a job: %d calls", n)
+	}
+}
+
+func TestCalibrationOnDashboard(t *testing.T) {
+	f := newFake()
+	f.status.Calibration = &calib.Estimates{
+		Ratio:     pacer.RatioEstimate{Ratio: 0.2, WindowPoints: 0.35, FromData: true},
+		Models:    []calib.ModelRate{{Model: "sonnet", TokensPerPoint: 20_000, Points: 0.06, Runs: 2}},
+		LimitHits: 1,
+	}
+	d := start(t, f, 120, 30)
+	// 58 week points left / 0.2 = 290 window points × 20k tokens.
+	has(t, d.view(), "Calibration", "1 point of 5h ≈ 0.20 of the week (measured over 35 points)", "1 rate-limit hits this week",
+		"58 points left to use (≈ 5.8M sonnet tokens)")
 }
