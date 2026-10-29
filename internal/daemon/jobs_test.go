@@ -248,3 +248,102 @@ func (g *gatedProber) Probe(ctx context.Context) (usage.Snapshot, error) {
 	}
 	return g.inner.Probe(ctx)
 }
+
+func TestDigestAndNotificationAfterRun(t *testing.T) {
+	home := shortHome(t)
+	var mu sync.Mutex
+	var notes []string
+	d := &Daemon{Home: home, Prober: &fakeProber{snaps: []float64{0.10}}, PollInterval: time.Hour, Activity: idle{}, TickInterval: time.Hour, Logf: t.Logf,
+		Notifier: func(title, msg string) error {
+			mu.Lock()
+			notes = append(notes, title+": "+msg)
+			mu.Unlock()
+			return nil
+		},
+		Runner: func(ctx context.Context, tp topic.Topic, o runner.Options) (runner.Summary, error) {
+			// A research run that leaves a report.
+			p := runner.Paths{Home: home}
+			os.MkdirAll(p.Work(tp.ID), 0o700)
+			os.WriteFile(p.Report(tp.ID), []byte("# r\n"), 0o600)
+			return runner.Summary{TopicID: tp.ID, Iterations: 1, StopReason: runner.StopDone, TopicStatus: topic.Done, WindowSpent: 0.04,
+				Tokens: usage.TokenCounts{Output: 8000}}, nil
+		}}
+	rctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(rctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	eventually(t, "socket", func() bool {
+		c, err := rpc.Dial(filepath.Join(home, "gmwd.sock"))
+		if err == nil {
+			c.Close()
+		}
+		return err == nil
+	})
+	c := client(t, home)
+	on := true
+	c.Call(ctx, rpc.MethodSettingsUpdate, rpc.SettingsPatch{Notify: &on}, nil)
+	c.Call(ctx, rpc.MethodTopicAdd, rpc.TopicParams{Topic: topic.Topic{ID: "rep", Title: "Write a report", Kind: topic.Research, Prompt: "p"}}, nil)
+
+	today := time.Now().Format("2006-01-02")
+	path := filepath.Join(home, "digest", today+".md")
+	eventually(t, "digest file", func() bool { _, err := os.Stat(path); return err == nil })
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), "**Write a report** (research) — report finished") {
+		t.Errorf("digest:\n%s", b)
+	}
+	eventually(t, "notification", func() bool { mu.Lock(); defer mu.Unlock(); return len(notes) == 1 })
+	if notes[0] != "gmwd: Write a report — report finished" {
+		t.Errorf("notification = %q", notes[0])
+	}
+
+	var dg rpc.DigestResult
+	if err := c.Call(ctx, rpc.MethodDigest, rpc.DigestParams{}, &dg); err != nil {
+		t.Fatal(err)
+	}
+	if dg.Date != today || !strings.Contains(dg.Markdown, "gmwd ran 1 job") || len(dg.Days) != 1 || dg.Days[0] != today {
+		t.Errorf("digest.get = %+v", dg)
+	}
+	if err := c.Call(ctx, rpc.MethodDigest, rpc.DigestParams{Date: "2026-13-45"}, &dg); err == nil {
+		t.Error("bad date accepted")
+	}
+	if err := c.Call(ctx, rpc.MethodDigest, rpc.DigestParams{Date: "2020-01-01"}, &dg); err != nil || !strings.Contains(dg.Markdown, "No gmwd runs") {
+		t.Errorf("empty day: %v %q", err, dg.Markdown)
+	}
+
+	var st rpc.StatusResult
+	c.Call(ctx, rpc.MethodStatus, nil, &st)
+	if st.Calibration == nil || st.Calibration.Ratio.Ratio <= 0 {
+		t.Errorf("calibration = %+v", st.Calibration)
+	}
+}
+
+func TestNoNotificationWhenOff(t *testing.T) {
+	home := shortHome(t)
+	sent := make(chan string, 1)
+	d := &Daemon{Home: home, Prober: &fakeProber{snaps: []float64{0.10}}, PollInterval: time.Hour, Activity: idle{}, TickInterval: time.Hour,
+		Notifier: func(_, msg string) error { sent <- msg; return nil },
+		Runner: func(ctx context.Context, tp topic.Topic, o runner.Options) (runner.Summary, error) {
+			return runner.Summary{TopicID: tp.ID, StopReason: runner.StopFailures, TopicStatus: topic.Failed}, nil
+		}}
+	rctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(rctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	eventually(t, "socket", func() bool {
+		c, err := rpc.Dial(filepath.Join(home, "gmwd.sock"))
+		if err == nil {
+			c.Close()
+		}
+		return err == nil
+	})
+	client(t, home).Call(ctx, rpc.MethodTopicAdd, rpc.TopicParams{Topic: topic.Topic{ID: "x", Kind: topic.Research, Prompt: "p"}}, nil)
+	eventually(t, "digest", func() bool {
+		_, err := os.Stat(filepath.Join(home, "digest", time.Now().Format("2006-01-02")+".md"))
+		return err == nil
+	})
+	select {
+	case msg := <-sent:
+		t.Errorf("notified with notify off: %q", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

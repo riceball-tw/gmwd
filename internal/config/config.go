@@ -34,6 +34,9 @@ type Settings struct {
 	// QuietMinutes is how long the user must have been idle. 0 turns idle
 	// detection off: gmwd runs whenever the budget allows.
 	QuietMinutes int `json:"quietMinutes"`
+	// Notify sends a macOS notification when a run leaves something to
+	// review.
+	Notify bool `json:"notify"`
 }
 
 // IdleMode is when gmwd may run.

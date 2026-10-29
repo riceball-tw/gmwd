@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"gmwd/internal/calib"
 	"gmwd/internal/config"
 	"gmwd/internal/store"
 	"gmwd/internal/topic"
@@ -28,6 +29,7 @@ const (
 	MethodRunsList       = "runs.list"       // RunsParams → RunsResult
 	MethodUsageRefresh   = "usage.refresh"   // → usage.Snapshot (runs claude /usage now)
 	MethodSubscribe      = "subscribe"       // → nil; events follow as notifications
+	MethodDigest         = "digest.get"      // DigestParams → DigestResult
 
 	// NotifyEvent is the method name of server→client notifications.
 	NotifyEvent = "event"
@@ -46,6 +48,8 @@ type StatusResult struct {
 	Job *JobInfo `json:"job,omitempty"`
 	// Reason says why gmwd is or isn't working right now.
 	Reason string `json:"reason,omitempty"`
+	// Calibration is what gmwd has learned about the limits.
+	Calibration *calib.Estimates `json:"calibration,omitempty"`
 }
 
 // JobInfo describes a running job.
@@ -76,6 +80,7 @@ type SettingsPatch struct {
 	ReservePct   *float64         `json:"reservePct,omitempty"`
 	IdleMode     *config.IdleMode `json:"idleMode,omitempty"`
 	QuietMinutes *int             `json:"quietMinutes,omitempty"`
+	Notify       *bool            `json:"notify,omitempty"`
 }
 
 // Apply returns s with the patch applied.
@@ -95,12 +100,27 @@ func (p SettingsPatch) Apply(s config.Settings) config.Settings {
 	if p.QuietMinutes != nil {
 		s.QuietMinutes = *p.QuietMinutes
 	}
+	if p.Notify != nil {
+		s.Notify = *p.Notify
+	}
 	return s
 }
 
 type RunsParams struct {
 	TopicID string `json:"topicId,omitempty"`
 	Limit   int    `json:"limit,omitempty"`
+}
+
+// DigestParams picks a day; empty means today.
+type DigestParams struct {
+	Date string `json:"date,omitempty"` // YYYY-MM-DD
+}
+
+type DigestResult struct {
+	Date     string `json:"date"`
+	Markdown string `json:"markdown"`
+	// Days lists the days that have a digest, newest first.
+	Days []string `json:"days"`
 }
 
 type RunsResult struct {

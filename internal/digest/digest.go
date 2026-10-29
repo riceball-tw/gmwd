@@ -124,8 +124,8 @@ func addTokens(dst *usage.TokenCounts, c usage.TokenCounts) {
 	dst.Requests += c.Requests
 }
 
-// needsReview says why the user should look at a topic, or "".
-func (t Topic) needsReview() string {
+// NeedsReview says why the user should look at a topic, or "".
+func (t Topic) NeedsReview() string {
 	switch {
 	case t.Status == topic.Failed:
 		return "failed — needs attention"
@@ -162,8 +162,8 @@ func (d Digest) Markdown() string {
 
 	var review []string
 	for _, t := range d.Topics {
-		if why := t.needsReview(); why != "" {
-			line := fmt.Sprintf("- **%s** (%s) — %s", t.title(), t.Kind, why)
+		if why := t.NeedsReview(); why != "" {
+			line := fmt.Sprintf("- **%s** (%s) — %s", t.Name(), t.Kind, why)
 			switch {
 			case t.Branch != nil && t.NewCommits > 0:
 				line += fmt.Sprintf("  \n  `git -C %s log --stat %s..%s`", t.Repo, t.Branch.Base, t.Branch.Branch)
@@ -182,7 +182,7 @@ func (d Digest) Markdown() string {
 
 	b.WriteString("\n## Topics\n")
 	for _, t := range d.Topics {
-		fmt.Fprintf(&b, "\n### %s · `%s` · %s\n\n", t.title(), t.ID, t.Status)
+		fmt.Fprintf(&b, "\n### %s · `%s` · %s\n\n", t.Name(), t.ID, t.Status)
 		fmt.Fprintf(&b, "- %d run%s, %d iteration%s, %s tokens, %s of 5h windows\n",
 			t.Runs, plural(t.Runs), t.Iterations, plural(t.Iterations), tokens(jobTokens(t.Tokens)), pct(t.WindowSpent))
 		fmt.Fprintf(&b, "- stopped: %s\n", strings.Join(t.Stops, ", "))
@@ -206,7 +206,8 @@ func (d Digest) Markdown() string {
 	return b.String()
 }
 
-func (t Topic) title() string {
+// Name is the title, or the id if there is none.
+func (t Topic) Name() string {
 	if t.Title != "" {
 		return t.Title
 	}

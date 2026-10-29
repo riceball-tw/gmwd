@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"gmwd/internal/calib"
+	"gmwd/internal/digest"
 	"gmwd/internal/rpc"
 	"gmwd/internal/scheduler"
 	"gmwd/internal/store"
@@ -43,6 +45,8 @@ type Daemon struct {
 	Runner       scheduler.RunFunc
 	Activity     scheduler.ActivityChecker
 	TickInterval time.Duration
+	// Notifier shows a desktop notification; nil sends none.
+	Notifier func(title, message string) error
 
 	store   *store.Store
 	srv     *rpc.Server
@@ -53,6 +57,8 @@ type Daemon struct {
 	mu       sync.Mutex
 	usage    *usage.Snapshot
 	usageErr string
+	calib    *calib.Estimates
+	calibAt  time.Time
 }
 
 func (d *Daemon) logf(format string, args ...any) {
@@ -120,13 +126,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	schedDone := make(chan struct{})
 	if d.Runner != nil {
 		d.sched = &scheduler.Scheduler{
-			Store:    d.store,
-			Run:      d.Runner,
-			Activity: d.Activity,
-			OnUsage:  func(snap usage.Snapshot) { d.ObserveUsage(context.Background(), snap) },
-			Notify:   d.srv.Notify,
-			Logf:     d.logf,
-			Interval: d.TickInterval,
+			Store:      d.store,
+			Run:        d.Runner,
+			Activity:   d.Activity,
+			OnUsage:    func(snap usage.Snapshot) { d.ObserveUsage(context.Background(), snap) },
+			OnFinished: d.afterRun,
+			Notify:     d.srv.Notify,
+			Logf:       d.logf,
+			Interval:   d.TickInterval,
 		}
 		go func() {
 			defer close(schedDone)
@@ -286,6 +293,7 @@ func (d *Daemon) register() {
 	handle(rpc.MethodUsageRefresh, func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return d.refreshUsage(ctx)
 	})
+	handle(rpc.MethodDigest, d.digest)
 }
 
 func (d *Daemon) status(ctx context.Context, _ json.RawMessage) (any, error) {
@@ -304,6 +312,9 @@ func (d *Daemon) status(ctx context.Context, _ json.RawMessage) (any, error) {
 	d.mu.Lock()
 	res.Usage, res.UsageError = d.usage, d.usageErr
 	d.mu.Unlock()
+	if e, err := d.calibration(ctx); err == nil {
+		res.Calibration = &e
+	}
 	switch {
 	case d.sched != nil:
 		res.Job, res.Reason = d.sched.Status()
@@ -443,4 +454,81 @@ func (d *Daemon) settingsUpdate(ctx context.Context, params json.RawMessage) (an
 	d.srv.Notify(rpc.Event{Type: rpc.EventSettings, Settings: &next})
 	d.wake()
 	return next, nil
+}
+
+// calibration is recomputed at most once a minute; status is polled often.
+func (d *Daemon) calibration(ctx context.Context) (calib.Estimates, error) {
+	d.mu.Lock()
+	if d.calib != nil && time.Since(d.calibAt) < time.Minute {
+		e := *d.calib
+		d.mu.Unlock()
+		return e, nil
+	}
+	d.mu.Unlock()
+	e, err := calib.Estimate(ctx, d.store, time.Now())
+	if err != nil {
+		return e, err
+	}
+	d.mu.Lock()
+	d.calib, d.calibAt = &e, time.Now()
+	d.mu.Unlock()
+	return e, nil
+}
+
+func (d *Daemon) digest(ctx context.Context, params json.RawMessage) (any, error) {
+	var p rpc.DigestParams
+	if err := rpc.Decode(params, &p); err != nil {
+		return nil, err
+	}
+	day := time.Now()
+	if p.Date != "" {
+		t, err := time.ParseInLocation("2006-01-02", p.Date, time.Local)
+		if err != nil {
+			return nil, &rpc.Error{Code: rpc.CodeInvalidParams, Message: fmt.Sprintf("date %q: want YYYY-MM-DD", p.Date)}
+		}
+		day = t
+	}
+	e, _ := d.calibration(ctx)
+	dg, err := digest.Build(ctx, d.store, d.Home, day, e.Ratio.Ratio)
+	if err != nil {
+		return nil, err
+	}
+	days, err := digest.Days(d.Home)
+	if err != nil {
+		return nil, err
+	}
+	return rpc.DigestResult{Date: dg.Day.Format("2006-01-02"), Markdown: dg.Markdown(), Days: days}, nil
+}
+
+// afterRun rewrites today's digest and, if the user wants, tells them when
+// a run left something to review.
+func (d *Daemon) afterRun(t topic.Topic, r store.Run) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d.mu.Lock()
+	d.calib = nil // new run data
+	d.mu.Unlock()
+	e, _ := d.calibration(ctx)
+	dg, err := digest.Build(ctx, d.store, d.Home, r.EndedAt, e.Ratio.Ratio)
+	if err != nil {
+		d.logf("digest: %v", err)
+		return
+	}
+	if _, err := digest.Write(d.Home, dg); err != nil {
+		d.logf("digest: %v", err)
+	}
+	settings, err := d.store.Settings(ctx)
+	if err != nil || !settings.Notify || d.Notifier == nil {
+		return
+	}
+	for _, dt := range dg.Topics {
+		if dt.ID != t.ID {
+			continue
+		}
+		if why := dt.NeedsReview(); why != "" {
+			if err := d.Notifier("gmwd", dt.Name()+" — "+why); err != nil {
+				d.logf("notify: %v", err)
+			}
+		}
+	}
 }
