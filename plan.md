@@ -81,10 +81,10 @@ One number: **max burn %** — the share of the weekly cap gmwd may bring total 
 - Optional advanced settings: reserve %, per-job token cap, quiet hours, "only run when idle" toggle.
 
 ### 4.4 Idle detection (`internal/activity`)
-The user's own work comes first.
-- Active if: an interactive `claude` process exists that isn't one of ours (track our PIDs), or user-session JSONL files were written in the last N minutes (default 10).
-- Optional: macOS HID idle time (`ioreg -c IOHIDSystem` → `HIDIdleTime`) for "only when away from keyboard".
-- On user activity: the running job finishes its current iteration and then pauses (configurable: or kill immediately).
+The user's own work comes first. Two modes (setting `idleMode`):
+- **not-using-claude** (default): idle when no interactive Claude Code session (`entrypoint: "cli"` records in `~/.claude/projects/**/*.jsonl`) was written in the last `quietMinutes` (default 10). gmwd's own runs are `sdk-cli` and don't count. An open but quiet `claude` process doesn't count either: sessions are often left open overnight.
+- **away**: additionally requires macOS HID idle time (`ioreg -c IOHIDSystem` → `HIDIdleTime`) of at least `quietMinutes`.
+- On user activity or `gmwd pause`: the running job finishes its current iteration and stops; the topic stays queued.
 
 ### 4.5 Topics (`internal/topic`)
 ```
