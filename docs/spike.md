@@ -163,11 +163,23 @@ All runs: `--permission-mode dontAsk` (anything not pre-approved is denied, nobo
 | same, network (`curl https://example.com`) | blocked: `deny network-outbound example.com:443` |
 | same + `"allowUnsandboxedCommands":false`, no `Bash` in `--allowedTools`, model told to use `dangerouslyDisableSandbox` | sandboxed Bash auto-allowed; escape not possible, write still denied |
 
-So the runner never passes plain `Bash` in `--allowedTools` (that would pre-approve unsandboxed runs).
+Follow-up from the first real solve run (milestone 2 e2e):
+
+| Check | Result |
+|---|---|
+| Bash *not* pre-approved, command with `$VAR` expansion (`GOCACHE=$TMPDIR/x go test`) | **denied** under dontAsk — sandbox auto-allow doesn't cover it |
+| `--allowedTools Bash` + `allowUnsandboxedCommands:false`: `$`-expansion, write outside, `dangerouslyDisableSandbox` | expansion runs; outside write still `operation not permitted`; no escape |
+| write to `/tmp/x` in the sandbox | denied |
+| `$TMPDIR` in the sandbox | a sandbox-private temp dir (not the parent's `$TMPDIR`); writable |
+| `"filesystem":{"allowWrite":["<dir>"]}` in sandbox settings | `<dir>` writable |
+| `--allowedTools 'Edit(<dir>/**)'` | does **not** make `<dir>` writable for Bash |
+
+So the runner pre-approves `Bash` (only ever together with `allowUnsandboxedCommands:false`) and gives each
+solve topic a cache dir `~/.gmwd/cache/<id>` via `filesystem.allowWrite`, with `GOCACHE`, `XDG_CACHE_HOME`
+and `npm_config_cache` pointing into it.
 
 Consequences for solve jobs:
 - In a worktree, `.git` points into the main repo, which is outside cwd → the model can't commit; gmwd commits.
   Network is blocked, so `git push` can't work either.
-- Toolchain caches outside cwd (`~/Library/Caches/go-build`, npm, …) are not writable. Point them into the job's
-  tmp via env (`GOCACHE`, `npm_config_cache`, …) or allow per-topic extra write dirs / domains (later).
+- Toolchains whose caches aren't covered by those env vars need more entries (later: per-topic config).
 - Sandboxed Bash can still *read* most of the disk; with network off it can't send it anywhere.
