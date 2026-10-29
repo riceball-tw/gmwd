@@ -37,11 +37,13 @@ type Scheduler struct {
 	Activity ActivityChecker
 	// OnUsage receives rate_limit_events from running jobs (the daemon
 	// stores them and tells clients).
-	OnUsage  func(usage.Snapshot)
-	Notify   func(rpc.Event)
-	Logf     func(format string, args ...any)
-	Now      func() time.Time
-	Interval time.Duration
+	OnUsage func(usage.Snapshot)
+	Notify  func(rpc.Event)
+	// OnFinished is called after a job's outcome is recorded.
+	OnFinished func(t topic.Topic, r store.Run)
+	Logf       func(format string, args ...any)
+	Now        func() time.Time
+	Interval   time.Duration
 
 	wake chan struct{}
 	mu   sync.Mutex
@@ -316,9 +318,10 @@ func (s *Scheduler) runJob(ctx context.Context, p plan, runRow int64) {
 	if status == "" {
 		status = topic.Queued
 	}
-	if err := s.Store.FinishRun(rctx, store.Run{ID: runRow, TopicID: p.topic.ID, RunID: sum.RunID, RunDir: sum.RunDir,
+	finished := store.Run{ID: runRow, TopicID: p.topic.ID, RunID: sum.RunID, RunDir: sum.RunDir, Model: p.topic.ModelOrDefault(),
 		EndedAt: s.now(), StopReason: stop, Iterations: sum.Iterations, Succeeded: sum.Succeeded, Failed: sum.Failed,
-		Tokens: sum.Tokens, CostUSD: sum.CostUSD, WindowSpent: sum.WindowSpent, Commits: sum.Commits}); err != nil {
+		Tokens: sum.Tokens, CostUSD: sum.CostUSD, WindowSpent: sum.WindowSpent, Commits: sum.Commits}
+	if err := s.Store.FinishRun(rctx, finished); err != nil {
 		s.logf("record run: %v", err)
 	}
 	if err := s.Store.SetTopicStatus(rctx, p.topic.ID, status); err != nil {
@@ -326,14 +329,22 @@ func (s *Scheduler) runJob(ctx context.Context, p plan, runRow int64) {
 	}
 	s.logf("finished %s: %s after %d iterations, %.0f%% of the 5h window", p.topic.ID, stop, sum.Iterations, sum.WindowSpent*100)
 
+	// Clear the job and its "running" reason together, so status never
+	// shows no job with a stale reason.
 	s.mu.Lock()
 	s.job, s.cancelJob = nil, nil
+	s.reason = fmt.Sprintf("finished %s (%s)", p.topic.ID, stop)
 	s.mu.Unlock()
 	if t, err := s.Store.GetTopic(rctx, p.topic.ID); err == nil {
 		s.notify(rpc.Event{Type: rpc.EventTopic, Topic: &t})
 	}
 	s.notify(rpc.Event{Type: rpc.EventJob})
-	s.Wake() // budget may allow the next topic
+	s.Wake() // decide what's next before the slower follow-up work
+	if s.OnFinished != nil {
+		t := p.topic
+		t.Status = status
+		s.OnFinished(t, finished)
+	}
 }
 
 // shouldStop ends a job at the next iteration boundary when gmwd is

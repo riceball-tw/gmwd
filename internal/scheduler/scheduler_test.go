@@ -425,3 +425,19 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestNoStaleRunningReasonAfterJob(t *testing.T) {
+	e := newEnv(t)
+	e.freshUsage(0.1)
+	e.add("t", 3)
+	release := make(chan struct{})
+	e.s.OnFinished = func(topic.Topic, store.Run) { <-release } // slow follow-up work
+	e.s.Tick(ctx)
+	waitFor(t, func() bool { job, _ := e.s.Status(); return job == nil })
+	job, reason := e.s.Status()
+	if job == nil && strings.HasPrefix(reason, "running") {
+		t.Errorf("no job but reason %q", reason)
+	}
+	close(release)
+	e.s.WaitJob()
+}

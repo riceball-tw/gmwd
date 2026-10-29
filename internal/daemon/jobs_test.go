@@ -91,10 +91,15 @@ func TestAddedTopicRunsAutomatically(t *testing.T) {
 	if len(got) != 1 || got[0].Budget.WindowPct <= 0 || got[0].Budget.ReservePct != 0.15 {
 		t.Errorf("runner options = %+v", got)
 	}
+	// The reason passes through "finished auto" before the next decision.
 	var st rpc.StatusResult
-	c.Call(ctx, rpc.MethodStatus, nil, &st)
-	if st.Job != nil || st.Reason != "idle: no queued topics" {
-		t.Errorf("status after = job %+v reason %q", st.Job, st.Reason)
+	eventually(t, "next decision", func() bool {
+		st = rpc.StatusResult{}
+		c.Call(ctx, rpc.MethodStatus, nil, &st)
+		return st.Reason == "idle: no queued topics"
+	})
+	if st.Job != nil {
+		t.Errorf("status after = job %+v", st.Job)
 	}
 }
 
@@ -126,10 +131,10 @@ func TestStatusShowsJobAndPauseStopsIt(t *testing.T) {
 	eventually(t, "job to stop", func() bool {
 		st = rpc.StatusResult{} // decoding into a used value keeps stale fields
 		c.Call(ctx, rpc.MethodStatus, nil, &st)
-		return st.Job == nil && st.Topics[topic.Queued] == 1
+		return st.Job == nil && st.Topics[topic.Queued] == 1 && st.Reason == "paused"
 	})
-	if st.Reason != "paused" {
-		t.Errorf("reason = %q", st.Reason)
+	if strings.HasPrefix(st.Reason, "running") {
+		t.Errorf("reason = %q with no job", st.Reason)
 	}
 	var runs rpc.RunsResult
 	c.Call(ctx, rpc.MethodRunsList, rpc.RunsParams{TopicID: "long"}, &runs)
