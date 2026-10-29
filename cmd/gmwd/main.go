@@ -22,7 +22,7 @@ Usage:
   gmwd rm ID                          delete a topic (keeps its files and branch)
   gmwd pause [ID] | resume [ID]       pause/resume the daemon, or one topic
   gmwd digest [--date YYYY-MM-DD]     what gmwd did that day and what to review
-  gmwd config [--max-burn N] [--reserve N] [--idle-mode M] [--quiet-minutes N]
+  gmwd config [--max-burn N] [--reserve N] [--idle-mode M] [--quiet-minutes N] [--notify on|off]
                                       show or change settings
   gmwd run ID                         run a topic now, in the foreground
   gmwd run --kind K --title T --prompt P [--repo DIR]
