@@ -10,6 +10,9 @@ const usageText = `gmwd — use leftover Claude quota on your backlog
 
 Usage:
   gmwd status [--json] [--no-probe]   current 5h / weekly usage and reset times
+  gmwd run --kind K --title T --prompt P [--repo DIR]
+                                      run a new topic in the foreground
+  gmwd run ID                         continue a topic
 `
 
 func main() {
@@ -21,6 +24,8 @@ func main() {
 	switch os.Args[1] {
 	case "status":
 		err = cmdStatus(os.Args[2:])
+	case "run":
+		err = cmdRun(os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usageText)
 		return
