@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"math"
+	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -301,5 +305,108 @@ func TestSettingsFromOlderVersionGetNewDefaults(t *testing.T) {
 	}
 	if !got.Paused || got.MaxBurnPct != 60 || got.IdleMode != config.IdleNotUsingClaude || got.QuietMinutes != 10 {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestUpgradeFromV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(migrations[0] + `; PRAGMA user_version = 1;
+		INSERT INTO topics (id, title, kind, prompt, status, created_at, updated_at) VALUES ('old', 'Old', 'research', 'p', 'queued', 1, 1);
+		INSERT INTO runs (topic_id, run_id, started_at, ended_at, window_spent) VALUES ('old', 'r', 1, 2, 0.05);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	runs, err := s.ListRuns(ctx, "old", 10)
+	if err != nil || len(runs) != 1 || runs[0].WindowSpent != 0.05 {
+		t.Errorf("runs after upgrade: %+v %v", runs, err)
+	}
+}
+
+func TestWindowSpent(t *testing.T) {
+	s, _ := open(t)
+	s.AddTopic(ctx, research("w", 3))
+	windowStart := time.Now().Add(-2 * time.Hour)
+	for _, r := range []struct {
+		at    time.Time
+		spent float64
+	}{{windowStart.Add(-time.Minute), 0.30}, {windowStart.Add(time.Minute), 0.05}, {windowStart.Add(time.Hour), 0.07}} {
+		id, _ := s.StartRun(ctx, Run{TopicID: "w", StartedAt: r.at})
+		s.FinishRun(ctx, Run{ID: id, TopicID: "w", EndedAt: r.at.Add(time.Minute), WindowSpent: r.spent})
+	}
+	got, err := s.WindowSpent(ctx, windowStart)
+	if err != nil || math.Abs(got-0.12) > 1e-9 {
+		t.Errorf("spent = %v, %v", got, err)
+	}
+	if got, _ := s.WindowSpent(ctx, time.Now()); got != 0 {
+		t.Errorf("empty window = %v", got)
+	}
+}
+
+func TestRecoverAbandoned(t *testing.T) {
+	s, _ := open(t)
+	for _, id := range []string{"dead", "live", "norun", "queued"} {
+		s.AddTopic(ctx, research(id, 3))
+	}
+	for _, id := range []string{"dead", "live", "norun"} {
+		if err := s.ClaimTopic(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.StartRun(ctx, Run{TopicID: "dead", StartedAt: time.Now(), PID: 111})
+	s.StartRun(ctx, Run{TopicID: "live", StartedAt: time.Now(), PID: 222})
+	alive := func(pid int) bool { return pid == 222 }
+	got, err := s.RecoverAbandoned(ctx, alive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"dead", "norun"}) {
+		t.Errorf("recovered %v", got)
+	}
+	for id, want := range map[string]topic.Status{"dead": topic.Queued, "norun": topic.Queued, "live": topic.Running, "queued": topic.Queued} {
+		if tp, _ := s.GetTopic(ctx, id); tp.Status != want {
+			t.Errorf("%s: %s, want %s", id, tp.Status, want)
+		}
+	}
+	runs, _ := s.ListRuns(ctx, "dead", 1)
+	if runs[0].StopReason != "abandoned" || runs[0].EndedAt.IsZero() {
+		t.Errorf("dead run = %+v", runs[0])
+	}
+	if runs, _ := s.ListRuns(ctx, "live", 1); !runs[0].EndedAt.IsZero() {
+		t.Error("live run was closed")
+	}
+}
+
+func TestStartRunRecordsOurPID(t *testing.T) {
+	s, _ := open(t)
+	s.AddTopic(ctx, research("p", 3))
+	s.ClaimTopic(ctx, "p")
+	s.StartRun(ctx, Run{TopicID: "p", StartedAt: time.Now()})
+	// We're alive, so nothing is recovered.
+	got, _ := s.RecoverAbandoned(ctx, func(pid int) bool { return pid == os.Getpid() })
+	if len(got) != 0 {
+		t.Errorf("recovered our own run: %v", got)
+	}
+}
+
+func TestListUsage(t *testing.T) {
+	s, _ := open(t)
+	base := time.Now().Add(-time.Hour)
+	for i := range 3 {
+		at := base.Add(time.Duration(i) * 10 * time.Minute)
+		s.AddUsage(ctx, usage.Snapshot{FiveHour: usage.Window{Utilization: float64(i) / 10, ObservedAt: at}, SevenDay: usage.Window{Utilization: 0.3, ObservedAt: at}})
+	}
+	got, err := s.ListUsage(ctx, base.Add(5*time.Minute))
+	if err != nil || len(got) != 2 || got[0].FiveHour.Utilization != 0.1 || got[1].FiveHour.Utilization != 0.2 {
+		t.Errorf("got %+v, %v", got, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -95,6 +96,8 @@ var migrations = []string{
 		id   INTEGER PRIMARY KEY CHECK (id = 1),
 		json TEXT NOT NULL
 	);`,
+	// v2: which process runs a job, to recover topics after a crash.
+	`ALTER TABLE runs ADD COLUMN pid INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -247,6 +250,7 @@ func mustAffect(res sql.Result, err error, what, id string) error {
 type Run struct {
 	ID          int64             `json:"id"`
 	TopicID     string            `json:"topicId"`
+	PID         int               `json:"pid,omitempty"`
 	RunID       string            `json:"runId"`
 	RunDir      string            `json:"runDir"`
 	StartedAt   time.Time         `json:"startedAt"`
@@ -263,8 +267,11 @@ type Run struct {
 
 // StartRun records a run that has begun and returns its row id.
 func (s *Store) StartRun(ctx context.Context, r Run) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO runs (topic_id, run_id, run_dir, started_at) VALUES (?,?,?,?)`,
-		r.TopicID, r.RunID, r.RunDir, ms(r.StartedAt))
+	if r.PID == 0 {
+		r.PID = os.Getpid()
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO runs (topic_id, run_id, run_dir, started_at, pid) VALUES (?,?,?,?,?)`,
+		r.TopicID, r.RunID, r.RunDir, ms(r.StartedAt), r.PID)
 	if err != nil {
 		return 0, err
 	}
@@ -318,6 +325,56 @@ func (s *Store) ListRuns(ctx context.Context, topicID string, limit int) ([]Run,
 	return runs, rows.Err()
 }
 
+// WindowSpent sums the 5h-window points used by runs started at or after
+// since (the current window's start).
+func (s *Store) WindowSpent(ctx context.Context, since time.Time) (float64, error) {
+	var spent float64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(window_spent), 0) FROM runs WHERE started_at >= ?`, ms(since)).Scan(&spent)
+	return spent, err
+}
+
+// RecoverAbandoned finds topics left running by a process that is gone
+// (alive reports whether a pid still exists), puts them back in the queue
+// and closes their open runs. It returns the recovered topic ids.
+func (s *Store) RecoverAbandoned(ctx context.Context, alive func(pid int) bool) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id, COALESCE((SELECT r.pid FROM runs r WHERE r.topic_id = t.id AND r.ended_at = 0
+		ORDER BY r.started_at DESC LIMIT 1), 0) FROM topics t WHERE t.status = ?`, topic.Running)
+	if err != nil {
+		return nil, err
+	}
+	type cand struct {
+		id  string
+		pid int
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		if err := rows.Scan(&c.id, &c.pid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var recovered []string
+	for _, c := range cands {
+		if c.pid != 0 && alive(c.pid) {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE runs SET ended_at = ?, stop_reason = 'abandoned' WHERE topic_id = ? AND ended_at = 0`, ms(time.Now()), c.id); err != nil {
+			return recovered, err
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE topics SET status = ?, updated_at = ? WHERE id = ? AND status = ?`, topic.Queued, ms(time.Now()), c.id, topic.Running); err != nil {
+			return recovered, err
+		}
+		recovered = append(recovered, c.id)
+	}
+	return recovered, nil
+}
+
 // Usage samples.
 
 // AddUsage records an observation of both windows.
@@ -334,15 +391,38 @@ func (s *Store) AddUsage(ctx context.Context, snap usage.Snapshot) error {
 
 // LatestUsage returns the newest sample, or ErrNotFound.
 func (s *Store) LatestUsage(ctx context.Context) (usage.Snapshot, error) {
-	var snap usage.Snapshot
-	var at, r5, r7 int64
-	var src string
-	err := s.db.QueryRowContext(ctx, `SELECT at, source, status, five_hour, five_hour_resets_at, seven_day, seven_day_resets_at
-		FROM usage_samples ORDER BY at DESC LIMIT 1`).Scan(&at, &src, &snap.Status, &snap.FiveHour.Utilization, &r5, &snap.SevenDay.Utilization, &r7)
+	snap, err := scanUsage(s.db.QueryRowContext(ctx, `SELECT at, source, status, five_hour, five_hour_resets_at, seven_day, seven_day_resets_at
+		FROM usage_samples ORDER BY at DESC LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return snap, fmt.Errorf("usage: %w", ErrNotFound)
 	}
+	return snap, err
+}
+
+// ListUsage returns samples observed at or after since, oldest first.
+func (s *Store) ListUsage(ctx context.Context, since time.Time) ([]usage.Snapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT at, source, status, five_hour, five_hour_resets_at, seven_day, seven_day_resets_at
+		FROM usage_samples WHERE at >= ? ORDER BY at`, ms(since))
 	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []usage.Snapshot
+	for rows.Next() {
+		snap, err := scanUsage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, snap)
+	}
+	return out, rows.Err()
+}
+
+func scanUsage(row interface{ Scan(...any) error }) (usage.Snapshot, error) {
+	var snap usage.Snapshot
+	var at, r5, r7 int64
+	var src string
+	if err := row.Scan(&at, &src, &snap.Status, &snap.FiveHour.Utilization, &r5, &snap.SevenDay.Utilization, &r7); err != nil {
 		return snap, err
 	}
 	snap.FiveHour.Kind, snap.SevenDay.Kind = usage.FiveHour, usage.SevenDay
