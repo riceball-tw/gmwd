@@ -383,6 +383,19 @@ func TestWakeTriggersDecision(t *testing.T) {
 	waitFor(t, func() bool { return e.runCount() == 1 })
 }
 
+func TestReasonsDifferingOnlyInNumbersAreLoggedOnce(t *testing.T) {
+	e := newEnv(t)
+	for _, r := range []string{"waiting: user active: Claude Code used 6s ago", "waiting: user active: Claude Code used 16s ago", "paused", "waiting: user active: Claude Code used 2m ago"} {
+		e.s.setReason(r)
+	}
+	if len(e.logs) != 3 {
+		t.Errorf("logged %q", e.logs)
+	}
+	if _, r := e.s.Status(); r != "waiting: user active: Claude Code used 2m ago" {
+		t.Errorf("status shows %q, want the latest wording", r)
+	}
+}
+
 func TestReasonsAreLoggedOnChange(t *testing.T) {
 	e := newEnv(t)
 	e.freshUsage(0.1)

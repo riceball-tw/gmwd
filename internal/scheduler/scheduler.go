@@ -6,6 +6,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -144,11 +145,16 @@ func (s *Scheduler) WaitJob() {
 	}
 }
 
+// digits makes reasons comparable across ticks: "used 6s ago" and "used
+// 16s ago" are the same situation and shouldn't each be logged.
+var digits = regexp.MustCompile(`[0-9]+`)
+
 func (s *Scheduler) setReason(r string) {
+	key := digits.ReplaceAllString(r, "#")
 	s.mu.Lock()
 	s.reason = r
-	changed := r != s.lastLogged
-	s.lastLogged = r
+	changed := key != s.lastLogged
+	s.lastLogged = key
 	s.mu.Unlock()
 	if changed {
 		s.logf("pacer: %s", r)
