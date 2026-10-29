@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"gmwd/internal/rpc"
+	"gmwd/internal/scheduler"
 	"gmwd/internal/store"
 	"gmwd/internal/topic"
 	"gmwd/internal/usage"
@@ -37,9 +38,15 @@ type Daemon struct {
 	Prober       Prober
 	PollInterval time.Duration
 	Logf         func(format string, args ...any)
+	// Runner runs jobs. Without it the daemon serves and polls but never
+	// starts work on its own.
+	Runner       scheduler.RunFunc
+	Activity     scheduler.ActivityChecker
+	TickInterval time.Duration
 
 	store   *store.Store
 	srv     *rpc.Server
+	sched   *scheduler.Scheduler
 	started time.Time
 
 	probeMu  sync.Mutex // one probe at a time
@@ -73,6 +80,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if snap, err := d.store.LatestUsage(ctx); err == nil {
 		d.usage = &snap
 	}
+	// A previous daemon (or gmwd run) that died mid-job left its topic
+	// running; put it back in the queue.
+	if ids, err := d.store.RecoverAbandoned(ctx, processAlive); err != nil {
+		d.logf("recover abandoned jobs: %v", err)
+	} else if len(ids) > 0 {
+		d.logf("re-queued topics abandoned by a dead process: %s", strings.Join(ids, ", "))
+	}
 
 	sock, err := rpc.SocketPath(d.Home)
 	if err != nil {
@@ -103,10 +117,42 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer stopPoll()
 	go d.poll(pollCtx)
 
+	schedDone := make(chan struct{})
+	if d.Runner != nil {
+		d.sched = &scheduler.Scheduler{
+			Store:    d.store,
+			Run:      d.Runner,
+			Activity: d.Activity,
+			OnUsage:  func(snap usage.Snapshot) { d.ObserveUsage(context.Background(), snap) },
+			Notify:   d.srv.Notify,
+			Logf:     d.logf,
+			Interval: d.TickInterval,
+		}
+		go func() {
+			defer close(schedDone)
+			d.sched.Loop(ctx)
+		}()
+	} else {
+		close(schedDone)
+	}
+
 	d.logf("daemon started (pid %d), socket %s", os.Getpid(), sock)
 	err = d.srv.Serve(ctx, ln)
+	<-schedDone // a running job is stopped and recorded before the store closes
 	d.logf("daemon stopped")
 	return err
+}
+
+// wake asks the scheduler to reconsider now.
+func (d *Daemon) wake() {
+	if d.sched != nil {
+		d.sched.Wake()
+	}
+}
+
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // lock takes an exclusive flock on path and writes our pid into it.
@@ -175,6 +221,22 @@ func (d *Daemon) refreshUsage(ctx context.Context) (usage.Snapshot, error) {
 // ObserveUsage records a usage observation from any source (the poller now;
 // running jobs' rate_limit_events later) and tells subscribers.
 func (d *Daemon) ObserveUsage(ctx context.Context, snap usage.Snapshot) {
+	// A rejected rate_limit_event may name only the window that hit its
+	// limit; keep the last known value of the other.
+	d.mu.Lock()
+	if prev := d.usage; prev != nil {
+		if snap.FiveHour.Kind == "" {
+			snap.FiveHour = prev.FiveHour
+		}
+		if snap.SevenDay.Kind == "" {
+			snap.SevenDay = prev.SevenDay
+		}
+	}
+	d.mu.Unlock()
+	if snap.FiveHour.Kind == "" || snap.SevenDay.Kind == "" {
+		d.logf("ignoring a partial usage reading with nothing to fill it from")
+		return
+	}
 	if err := d.store.AddUsage(ctx, snap); err != nil {
 		d.logf("store usage: %v", err)
 	}
@@ -235,12 +297,15 @@ func (d *Daemon) status(ctx context.Context, _ json.RawMessage) (any, error) {
 	res.Usage, res.UsageError = d.usage, d.usageErr
 	d.mu.Unlock()
 	switch {
+	case d.sched != nil:
+		res.Job, res.Reason = d.sched.Status()
+		if res.Reason == "" {
+			res.Reason = "starting"
+		}
 	case settings.Paused:
 		res.Reason = "paused"
-	case res.Topics[topic.Queued] == 0:
-		res.Reason = "idle: no queued topics"
 	default:
-		res.Reason = "idle: automatic runs are not implemented yet (milestone 4); use gmwd run"
+		res.Reason = "automatic runs are off in this daemon; use gmwd run"
 	}
 	return res, nil
 }
@@ -281,6 +346,7 @@ func (d *Daemon) addAndNotify(ctx context.Context, t topic.Topic) (topic.Topic, 
 		return added, err
 	}
 	d.srv.Notify(rpc.Event{Type: rpc.EventTopic, Topic: &added})
+	d.wake()
 	return added, nil
 }
 
@@ -327,6 +393,7 @@ func (d *Daemon) topicUpdate(ctx context.Context, params json.RawMessage) (any, 
 		return nil, err
 	}
 	d.srv.Notify(rpc.Event{Type: rpc.EventTopic, Topic: &t})
+	d.wake()
 	return t, nil
 }
 
@@ -366,5 +433,6 @@ func (d *Daemon) settingsUpdate(ctx context.Context, params json.RawMessage) (an
 		return nil, err
 	}
 	d.srv.Notify(rpc.Event{Type: rpc.EventSettings, Settings: &next})
+	d.wake()
 	return next, nil
 }
