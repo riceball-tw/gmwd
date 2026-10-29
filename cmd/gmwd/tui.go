@@ -5,6 +5,7 @@ import (
 	"io"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"gmwd/internal/tui"
 )
@@ -19,6 +20,9 @@ func cmdTUI(args []string, out io.Writer) error {
 		return err
 	}
 	defer c.Close()
+	// Ask the terminal for its background colour now: the query reads stdin,
+	// and once Bubble Tea owns the input it would swallow keystrokes.
+	lipgloss.HasDarkBackground()
 	_, err = tea.NewProgram(tui.New(c), tea.WithAltScreen()).Run()
 	return err
 }
