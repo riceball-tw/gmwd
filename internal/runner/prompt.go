@@ -46,7 +46,7 @@ func solveSettings(allowWrite ...string) string {
 	return string(b)
 }
 
-func (r *Runner) cacheDir(id string) string { return filepath.Join(r.Home, "cache", id) }
+func (r *Runner) cacheDir(id string) string { return r.paths().Cache(id) }
 
 func (r *Runner) invocation(t topic.Topic, ws workspace, n int, notes string) Invocation {
 	inv := Invocation{

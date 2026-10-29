@@ -112,10 +112,11 @@ const outcomeSchema = `{"type":"object","properties":{"status":{"type":"string",
 
 // Paths.
 
-func (r *Runner) topicDir(id string) string    { return filepath.Join(r.Home, "topics", id) }
-func (r *Runner) notesPath(id string) string   { return filepath.Join(r.topicDir(id), "notes.md") }
-func (r *Runner) researchDir(id string) string { return filepath.Join(r.topicDir(id), "work") }
-func (r *Runner) worktreeDir(id string) string { return filepath.Join(r.Home, "worktrees", id) }
+func (r *Runner) paths() Paths                 { return Paths{Home: r.Home} }
+func (r *Runner) topicDir(id string) string    { return r.paths().Topic(id) }
+func (r *Runner) notesPath(id string) string   { return r.paths().Notes(id) }
+func (r *Runner) researchDir(id string) string { return r.paths().Work(id) }
+func (r *Runner) worktreeDir(id string) string { return r.paths().Worktree(id) }
 
 func (r *Runner) now() time.Time {
 	if r.Now != nil {
