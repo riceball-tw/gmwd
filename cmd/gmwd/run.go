@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"gmwd/internal/calib"
 	"gmwd/internal/config"
+	"gmwd/internal/digest"
 	"gmwd/internal/rpc"
 	"gmwd/internal/runner"
 	"gmwd/internal/store"
@@ -138,6 +140,11 @@ Options:
 	defer cancel()
 	if err := st.FinishRun(fctx, rec); err != nil {
 		logf("warning: couldn't record the run: %v", err)
+	}
+	if e, err := calib.Estimate(fctx, st, time.Now()); err == nil {
+		if dg, err := digest.Build(fctx, st, home, rec.EndedAt, e.Ratio.Ratio); err == nil {
+			digest.Write(home, dg)
+		}
 	}
 	if runErr != nil {
 		return runErr

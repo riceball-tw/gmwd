@@ -417,3 +417,32 @@ func TestTUIWithoutDaemonExplains(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestDigestCommand(t *testing.T) {
+	home := env(t)
+	startDaemon(t, home)
+	contains(t, "empty", mustRun(t, "digest"), "# gmwd digest", "No gmwd runs on this day.")
+	contains(t, "no list", mustRun(t, "digest", "--list"), "no digests yet")
+	mustRun(t, "run", "--kind", "research", "--title", "Digest me", "--prompt", "p", "--window-pct", "0")
+	today := time.Now().Format("2006-01-02")
+	contains(t, "after run", mustRun(t, "digest"), "gmwd ran 1 job on 1 topic", "**Digest me** (research) — report finished")
+	contains(t, "list", mustRun(t, "digest", "--list"), today)
+	if _, err := os.Stat(filepath.Join(home, "digest", today+".md")); err != nil {
+		t.Errorf("foreground run didn't write the digest: %v", err)
+	}
+	if _, err := run(t, "digest", "--date", "yesterday"); err == nil {
+		t.Error("bad date accepted")
+	}
+	contains(t, "status", mustRun(t, "status"), "calibration: 1 point of the 5h window ≈ 0.15 points of the week (default, not enough data yet)")
+}
+
+func TestConfigNotify(t *testing.T) {
+	home := env(t)
+	startDaemon(t, home)
+	contains(t, "default", mustRun(t, "config"), "notify         off")
+	contains(t, "on", mustRun(t, "config", "--notify", "on"), "notify         on")
+	if _, err := run(t, "config", "--notify", "maybe"); err == nil {
+		t.Error("--notify maybe accepted")
+	}
+	contains(t, "still on", mustRun(t, "config"), "notify         on")
+}

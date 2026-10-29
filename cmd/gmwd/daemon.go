@@ -55,6 +55,7 @@ func newDaemon(out io.Writer, poll, tick time.Duration, jobs bool) (*daemon.Daem
 		PollInterval: poll,
 		TickInterval: tick,
 		Activity:     &activity.Detector{LogRoot: logRoot},
+		Notifier:     daemon.MacNotify,
 		Logf:         logf,
 	}
 	if jobs {

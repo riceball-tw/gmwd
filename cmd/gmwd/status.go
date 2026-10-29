@@ -111,6 +111,20 @@ func printStatus(out io.Writer, rep statusReport, now time.Time) {
 		fmt.Fprintf(out, "Daemon: running (pid %d, up %s), %s — %s\n", d.PID, round(now.Sub(d.StartedAt)), state, d.Reason)
 		fmt.Fprintf(out, "  max burn %.0f%% of the week, reserve %.0f%% of each 5h window\n", d.Settings.MaxBurnPct, d.Settings.ReservePct)
 		fmt.Fprintf(out, "  topics: %s\n", topicCounts(d.Topics))
+		if c := d.Calibration; c != nil {
+			basis := "default, not enough data yet"
+			if c.Ratio.FromData {
+				basis = fmt.Sprintf("measured over %.0f points", c.Ratio.WindowPoints*100)
+			}
+			fmt.Fprintf(out, "  calibration: 1 point of the 5h window ≈ %.2f points of the week (%s)", c.Ratio.Ratio, basis)
+			for _, m := range c.Models {
+				fmt.Fprintf(out, "; %s ≈ %s tokens/point", m.Model, tokens(int64(m.TokensPerPoint)))
+			}
+			if c.LimitHits > 0 {
+				fmt.Fprintf(out, "; %d rate-limit hits this week", c.LimitHits)
+			}
+			fmt.Fprintln(out)
+		}
 		if j := d.Job; j != nil {
 			fmt.Fprintf(out, "  job: %s, iteration %d, %s tokens, running %s\n", j.TopicID, j.Iteration,
 				tokens(j.Tokens.Input+j.Tokens.Output+j.Tokens.CacheCreate), round(now.Sub(j.StartedAt)))
