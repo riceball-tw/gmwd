@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gmwd/internal/daemon"
+	"gmwd/internal/launchd"
 	"gmwd/internal/rpc"
 	"gmwd/internal/store"
 	"gmwd/internal/topic"
@@ -236,6 +237,86 @@ func TestRunRefusesTopicAlreadyRunning(t *testing.T) {
 	}
 	if runs, _ := st.ListRuns(ctx, "busy", 10); len(runs) != 0 {
 		t.Errorf("refused run was recorded: %+v", runs)
+	}
+}
+
+func TestInstallAndUninstall(t *testing.T) {
+	home := env(t)
+	t.Setenv("PATH", "/opt/test/bin:/usr/bin")
+	exe := filepath.Join(t.TempDir(), "gmwd")
+	os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755)
+	oldExe, oldLC := executable, launchctl
+	t.Cleanup(func() { executable, launchctl = oldExe, oldLC })
+	executable = func() (string, error) { return exe, nil }
+
+	// A fake launchctl that starts and stops an in-process daemon, the way
+	// launchd would start `gmwd daemon`.
+	var calls []string
+	var stop func()
+	launchctl = func(args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		switch args[0] {
+		case "bootstrap":
+			stop = startDaemon(t, home)
+		case "bootout":
+			if stop == nil {
+				return []byte("not loaded"), errors.New("exit status 3")
+			}
+			stop()
+			stop = nil
+		}
+		return nil, nil
+	}
+
+	out := mustRun(t, "install")
+	contains(t, "install", out, "installed", "daemon running (pid", "daemon.log")
+	userHome, _ := os.UserHomeDir()
+	plist, err := os.ReadFile(launchd.PlistPath(userHome, launchd.Label))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _ := filepath.EvalSymlinks(exe)
+	contains(t, "plist", string(plist), "<string>"+resolved+"</string>", "<string>daemon</string>",
+		"<string>/opt/test/bin:/usr/bin</string>", "<key>GMWD_HOME</key>", "<string>"+home+"</string>")
+
+	// Installing again reloads it.
+	mustRun(t, "install")
+	contains(t, "uninstall", mustRun(t, "uninstall"), "daemon stopped")
+	if _, err := os.Stat(launchd.PlistPath(userHome, launchd.Label)); !os.IsNotExist(err) {
+		t.Error("plist still installed")
+	}
+	if _, err := dialDaemon(); !errors.Is(err, errNoDaemon) {
+		t.Error("daemon still answering after uninstall")
+	}
+	want := []string{"bootout gui/", "bootstrap gui/", "bootout gui/", "bootstrap gui/", "bootout gui/"}
+	if len(calls) != len(want) {
+		t.Fatalf("launchctl calls = %v", calls)
+	}
+	for i := range want {
+		if !strings.HasPrefix(calls[i], want[i]) {
+			t.Errorf("call %d = %q, want %q…", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestInstallRefusesGoRunBinary(t *testing.T) {
+	env(t)
+	dir := filepath.Join(t.TempDir(), "go-build123", "b001", "exe")
+	os.MkdirAll(dir, 0o755)
+	exe := filepath.Join(dir, "gmwd")
+	os.WriteFile(exe, nil, 0o755)
+	old := executable
+	t.Cleanup(func() { executable = old })
+	executable = func() (string, error) { return exe, nil }
+	called := false
+	oldLC := launchctl
+	t.Cleanup(func() { launchctl = oldLC })
+	launchctl = func(...string) ([]byte, error) { called = true; return nil, nil }
+	if _, err := run(t, "install"); err == nil || !strings.Contains(err.Error(), "go run") {
+		t.Errorf("err = %v", err)
+	}
+	if called {
+		t.Error("launchctl was called")
 	}
 }
 

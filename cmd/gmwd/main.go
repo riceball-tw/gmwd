@@ -13,6 +13,7 @@ const usageText = `gmwd — use leftover Claude quota on your backlog
 
 Usage:
   gmwd daemon                         run the daemon in the foreground
+  gmwd install | uninstall            start/stop the daemon with launchd at login
   gmwd status [--json] [--refresh]    usage, reset times and daemon state
   gmwd add --kind K --title T --prompt P [--repo DIR] [--priority 1-5] ...
                                       queue a topic (research or solve)
@@ -25,14 +26,16 @@ Usage:
 `
 
 var commands = map[string]func(args []string, out io.Writer) error{
-	"daemon": cmdDaemon,
-	"status": cmdStatus,
-	"add":    cmdAdd,
-	"ls":     cmdList,
-	"rm":     cmdRemove,
-	"pause":  func(args []string, out io.Writer) error { return cmdPause(args, out, true) },
-	"resume": func(args []string, out io.Writer) error { return cmdPause(args, out, false) },
-	"run":    cmdRun,
+	"daemon":    cmdDaemon,
+	"status":    cmdStatus,
+	"add":       cmdAdd,
+	"ls":        cmdList,
+	"rm":        cmdRemove,
+	"pause":     func(args []string, out io.Writer) error { return cmdPause(args, out, true) },
+	"resume":    func(args []string, out io.Writer) error { return cmdPause(args, out, false) },
+	"run":       cmdRun,
+	"install":   cmdInstall,
+	"uninstall": cmdUninstall,
 }
 
 func main() {
