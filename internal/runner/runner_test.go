@@ -194,21 +194,27 @@ func TestSolveInvocationIsSandboxed(t *testing.T) {
 	if got := argAfter(c.Args, "--tools"); !strings.Contains(got, "Bash") {
 		t.Errorf("--tools = %q, want Bash available", got)
 	}
-	// Bash must not be pre-approved: that would allow unsandboxed runs.
+	// Bash is pre-approved (so $-expansion isn't denied under dontAsk),
+	// which is only safe because unsandboxed commands are disabled.
 	i := slices.Index(c.Args, "--allowedTools")
+	var allowed []string
 	for _, a := range c.Args[i+1:] {
 		if strings.HasPrefix(a, "--") {
 			break
 		}
-		if strings.HasPrefix(a, "Bash") {
-			t.Errorf("Bash pre-approved: %v", c.Args)
-		}
+		allowed = append(allowed, a)
+	}
+	if !slices.Equal(allowed, []string{"Write(./**)", "Edit(./**)", "Bash"}) {
+		t.Errorf("allowed tools = %v", allowed)
 	}
 	var settings struct {
 		Sandbox struct {
 			Enabled                  bool  `json:"enabled"`
 			AutoAllowBashIfSandboxed bool  `json:"autoAllowBashIfSandboxed"`
 			AllowUnsandboxedCommands *bool `json:"allowUnsandboxedCommands"`
+			Filesystem               struct {
+				AllowWrite []string `json:"allowWrite"`
+			} `json:"filesystem"`
 		} `json:"sandbox"`
 	}
 	if err := json.Unmarshal([]byte(argAfter(c.Args, "--settings")), &settings); err != nil {
@@ -218,8 +224,16 @@ func TestSolveInvocationIsSandboxed(t *testing.T) {
 	if !sb.Enabled || !sb.AutoAllowBashIfSandboxed || sb.AllowUnsandboxedCommands == nil || *sb.AllowUnsandboxedCommands {
 		t.Errorf("sandbox settings = %+v", sb)
 	}
-	if !slices.ContainsFunc(c.Env, func(kv string) bool { return strings.HasPrefix(kv, "GOCACHE=") }) {
-		t.Error("GOCACHE not redirected")
+	// The only extra writable dir is the topic's own cache, which exists
+	// and is where the toolchain caches point.
+	cache := r.cacheDir("sbx")
+	if !slices.Equal(sb.Filesystem.AllowWrite, []string{cache}) || !exists(cache) {
+		t.Errorf("allowWrite = %v (cache %s exists: %v)", sb.Filesystem.AllowWrite, cache, exists(cache))
+	}
+	for _, want := range []string{"GOCACHE=" + filepath.Join(cache, "go-build"), "XDG_CACHE_HOME=" + cache} {
+		if !slices.Contains(c.Env, want) {
+			t.Errorf("env lacks %s", want)
+		}
 	}
 }
 

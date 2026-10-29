@@ -198,6 +198,9 @@ func (r *Runner) prepare(ctx context.Context, t topic.Topic, s *Summary) (worksp
 			return workspace{}, err
 		}
 		ws := workspace{dir: r.worktreeDir(t.ID), branch: t.Branch()}
+		if err := os.MkdirAll(r.cacheDir(t.ID), 0o700); err != nil {
+			return workspace{}, err
+		}
 		if err := ensureWorktree(ctx, t.Repo, ws.dir, ws.branch); err != nil {
 			return workspace{}, err
 		}

@@ -1,8 +1,8 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -15,12 +15,38 @@ var (
 	researchTools   = []string{"Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"}
 	researchAllowed = []string{"Write(./**)", "Edit(./**)", "WebSearch", "WebFetch"}
 
-	// Bash is deliberately not in solveAllowed: pre-approving it would also
-	// approve unsandboxed runs. The sandbox auto-allows sandboxed commands.
-	solveTools    = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
-	solveAllowed  = []string{"Write(./**)", "Edit(./**)"}
-	solveSettings = `{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false}}`
+	// Bash is pre-approved because sandbox auto-allow alone still denies
+	// commands with $-expansion under dontAsk. That is only safe together
+	// with allowUnsandboxedCommands=false (see solveSettings): every command
+	// then runs sandboxed, with no way to opt out.
+	solveTools   = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
+	solveAllowed = []string{"Write(./**)", "Edit(./**)", "Bash"}
 )
+
+type sandboxSettings struct {
+	Sandbox struct {
+		Enabled                  bool `json:"enabled"`
+		AutoAllowBashIfSandboxed bool `json:"autoAllowBashIfSandboxed"`
+		AllowUnsandboxedCommands bool `json:"allowUnsandboxedCommands"`
+		Filesystem               struct {
+			AllowWrite []string `json:"allowWrite"`
+		} `json:"filesystem"`
+	} `json:"sandbox"`
+}
+
+// solveSettings sandboxes Bash: writes only in the worktree, the sandbox's
+// own $TMPDIR and the given dirs; no network; no unsandboxed escape.
+func solveSettings(allowWrite ...string) string {
+	var s sandboxSettings
+	s.Sandbox.Enabled = true
+	s.Sandbox.AutoAllowBashIfSandboxed = true
+	s.Sandbox.AllowUnsandboxedCommands = false
+	s.Sandbox.Filesystem.AllowWrite = allowWrite
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func (r *Runner) cacheDir(id string) string { return filepath.Join(r.Home, "cache", id) }
 
 func (r *Runner) invocation(t topic.Topic, ws workspace, n int, notes string) Invocation {
 	inv := Invocation{
@@ -35,10 +61,10 @@ func (r *Runner) invocation(t topic.Topic, ws workspace, n int, notes string) In
 	case topic.Research:
 		inv.Tools, inv.AllowedTools = researchTools, researchAllowed
 	case topic.Solve:
-		inv.Tools, inv.AllowedTools, inv.Settings = solveTools, solveAllowed, solveSettings
-		// Toolchain caches outside the worktree aren't writable in the
-		// sandbox; keep them in temp.
-		cache := filepath.Join(os.TempDir(), "gmwd", t.ID, "cache")
+		// Toolchain caches in their default places aren't writable in the
+		// sandbox; give each topic its own, kept between runs.
+		cache := r.cacheDir(t.ID)
+		inv.Tools, inv.AllowedTools, inv.Settings = solveTools, solveAllowed, solveSettings(cache)
 		inv.ExtraEnv = []string{
 			"XDG_CACHE_HOME=" + cache,
 			"GOCACHE=" + filepath.Join(cache, "go-build"),
@@ -75,7 +101,8 @@ func buildPrompt(t topic.Topic, ws workspace, n int, notes string) string {
 			"(build, tests, lint) and fix anything you broke. " +
 			"Don't run git commit, push or branch commands: gmwd commits your changes when you report " +
 			"progress or done, and discards them when you report failed. " +
-			"Bash runs in a sandbox: writes outside the worktree and temp dirs fail, and there is no network.\n")
+			"Bash runs in a sandbox: writes outside the worktree, $TMPDIR and the toolchain caches gmwd set up " +
+			"(GOCACHE, XDG_CACHE_HOME, npm_config_cache) fail, and there is no network.\n")
 	}
 
 	b.WriteString("\nNotes from earlier iterations (oldest first):\n")
