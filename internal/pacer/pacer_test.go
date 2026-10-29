@@ -72,6 +72,10 @@ func TestDecide(t *testing.T) {
 			in.Usage.SevenDay.Utilization = 0.95
 			in.Usage.SevenDay.ResetsAt = now.Add(-time.Hour)
 		}, true, 0.90 / 34 / 0.15, "budget 18%"},
+		// 2 points of headroom over 10 windows is 0.2 week points each:
+		// 0.4 window points at ratio 0.5, under the 1-point minimum.
+		{"tiny headroom", func(in *Input) { in.Settings.MaxBurnPct = 32; in.Ratio = 0.5 }, false, 0,
+			"week at 30% of a 32% target: 2% left over 10 windows is too little to start a job"},
 		{"higher ratio", func(in *Input) { in.Ratio = 0.30 }, true, 0.20, "(≈6% of the week)"},
 	}
 	for _, c := range cases {

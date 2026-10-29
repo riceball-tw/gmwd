@@ -121,6 +121,11 @@ func Decide(in Input) Decision {
 		if windowRoom <= allowed {
 			return Decision{Reason: fmt.Sprintf("5h window at %s, keeping %s for you; resets %s", pct(u5), pct(s.ReservePct/100), clock(windowEnd)), Until: windowEnd}
 		}
+		if share/ratio < MinBudget {
+			// Too little weekly headroom to be worth a job in any window.
+			return Decision{Reason: fmt.Sprintf("week at %s of a %s target: %s left over %.0f windows is too little to start a job",
+				pct(u7), pct(target), pct(headroom), windowsLeft), Until: weekEnd}
+		}
 		return Decision{Reason: fmt.Sprintf("this window's share is used (%s of %s); next window %s", pct(in.SpentThisWindow), pct(share/ratio), clock(windowEnd)), Until: windowEnd}
 	}
 	return Decision{
