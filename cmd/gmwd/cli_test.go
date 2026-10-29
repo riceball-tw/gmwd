@@ -394,3 +394,19 @@ func TestDaemonRunsQueuedTopicsByItself(t *testing.T) {
 	}
 	contains(t, "ls", mustRun(t, "ls"), "later", "queued")
 }
+
+func TestConfig(t *testing.T) {
+	home := env(t)
+	startDaemon(t, home)
+	contains(t, "config", mustRun(t, "config"), "max burn       90%", "reserve        15%", "idle mode      not-using-claude", "quiet minutes  10")
+	out := mustRun(t, "config", "--max-burn", "70", "--quiet-minutes", "0", "--idle-mode", "away")
+	contains(t, "config set", out, "max burn       70%", "reserve        15%", "idle mode      away", "quiet minutes  0 (doesn't wait")
+	// Only the flags given change; zero values are real values.
+	contains(t, "config again", mustRun(t, "config", "--reserve", "0"), "max burn       70%", "reserve        0%", "quiet minutes  0")
+	for _, bad := range [][]string{{"--max-burn", "150"}, {"--idle-mode", "never"}, {"--quiet-minutes", "-5"}} {
+		if _, err := run(t, "config", bad...); err == nil {
+			t.Errorf("config %v accepted", bad)
+		}
+	}
+	contains(t, "unchanged after errors", mustRun(t, "config"), "max burn       70%", "idle mode      away")
+}
