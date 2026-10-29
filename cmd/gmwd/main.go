@@ -9,6 +9,9 @@ import (
 	"os"
 )
 
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 const usageText = `gmwd — use leftover Claude quota on your backlog
 
 Usage:
@@ -27,20 +30,25 @@ Usage:
   gmwd run ID                         run a topic now, in the foreground
   gmwd run --kind K --title T --prompt P [--repo DIR]
                                       add a topic and run it now
+  gmwd version                        print the version
 `
 
 var commands = map[string]func(args []string, out io.Writer) error{
-	"tui":       cmdTUI,
-	"daemon":    cmdDaemon,
-	"status":    cmdStatus,
-	"add":       cmdAdd,
-	"ls":        cmdList,
-	"rm":        cmdRemove,
-	"pause":     func(args []string, out io.Writer) error { return cmdPause(args, out, true) },
-	"resume":    func(args []string, out io.Writer) error { return cmdPause(args, out, false) },
-	"run":       cmdRun,
-	"config":    cmdConfig,
-	"digest":    cmdDigest,
+	"tui":    cmdTUI,
+	"daemon": cmdDaemon,
+	"status": cmdStatus,
+	"add":    cmdAdd,
+	"ls":     cmdList,
+	"rm":     cmdRemove,
+	"pause":  func(args []string, out io.Writer) error { return cmdPause(args, out, true) },
+	"resume": func(args []string, out io.Writer) error { return cmdPause(args, out, false) },
+	"run":    cmdRun,
+	"config": cmdConfig,
+	"digest": cmdDigest,
+	"version": func(_ []string, out io.Writer) error {
+		_, err := fmt.Fprintln(out, "gmwd", version)
+		return err
+	},
 	"install":   cmdInstall,
 	"uninstall": cmdUninstall,
 }

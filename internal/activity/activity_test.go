@@ -134,6 +134,9 @@ func TestSystemHIDIdleOnMac(t *testing.T) {
 		t.Skip("no ioreg")
 	}
 	d, err := SystemHIDIdle(ctx)
+	if err != nil && os.Getenv("CI") != "" {
+		t.Skipf("no HID idle time on this CI machine: %v", err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
