@@ -28,6 +28,8 @@ gmwd install      # start the daemon now and at every login (launchd)
 
 To try it without launchd, run `gmwd daemon` in a terminal instead.
 
+Prebuilt binaries (darwin and linux, arm64 and amd64) are attached to every CI run under *Actions → CI → Artifacts*. They aren't signed, so on macOS clear the download quarantine before running one: `xattr -d com.apple.quarantine gmwd`.
+
 ## Quick start
 
 ```sh
@@ -128,6 +130,8 @@ Everything lives in `~/.gmwd/` (override with `GMWD_HOME`):
 go test ./...            # no quota used: tests drive a fake claude
 go test -race ./...
 ```
+
+CI (`.github/workflows/ci.yml`) runs gofmt, `go vet` and `go test -race` on macOS and Linux, then cross-compiles the binaries. A `v*` tag stamps its name into `gmwd version`; other builds report `dev-<commit>`.
 
 - `docs/spike.md` records what the current Claude Code version actually does: log fields, stream-json events, the `/usage` output, window anchoring, and how the sandbox and permissions behave.
 - `plan.md` is the design.
