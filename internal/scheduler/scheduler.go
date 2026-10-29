@@ -250,7 +250,7 @@ func (s *Scheduler) start(ctx context.Context, p plan) {
 		return
 	}
 	startedAt := s.now()
-	runRow, err := s.Store.StartRun(ctx, store.Run{TopicID: p.topic.ID, StartedAt: startedAt})
+	runRow, err := s.Store.StartRun(ctx, store.Run{TopicID: p.topic.ID, StartedAt: startedAt, Model: p.topic.ModelOrDefault()})
 	if err != nil {
 		s.logf("record run: %v", err)
 		s.Store.SetTopicStatus(ctx, p.topic.ID, topic.Queued)

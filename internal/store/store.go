@@ -98,6 +98,8 @@ var migrations = []string{
 	);`,
 	// v2: which process runs a job, to recover topics after a crash.
 	`ALTER TABLE runs ADD COLUMN pid INTEGER NOT NULL DEFAULT 0;`,
+	// v3: which model a run used, for calibration per model.
+	`ALTER TABLE runs ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -251,6 +253,7 @@ type Run struct {
 	ID          int64             `json:"id"`
 	TopicID     string            `json:"topicId"`
 	PID         int               `json:"pid,omitempty"`
+	Model       string            `json:"model,omitempty"`
 	RunID       string            `json:"runId"`
 	RunDir      string            `json:"runDir"`
 	StartedAt   time.Time         `json:"startedAt"`
@@ -270,8 +273,8 @@ func (s *Store) StartRun(ctx context.Context, r Run) (int64, error) {
 	if r.PID == 0 {
 		r.PID = os.Getpid()
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO runs (topic_id, run_id, run_dir, started_at, pid) VALUES (?,?,?,?,?)`,
-		r.TopicID, r.RunID, r.RunDir, ms(r.StartedAt), r.PID)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO runs (topic_id, run_id, run_dir, started_at, pid, model) VALUES (?,?,?,?,?,?)`,
+		r.TopicID, r.RunID, r.RunDir, ms(r.StartedAt), r.PID, r.Model)
 	if err != nil {
 		return 0, err
 	}
@@ -294,7 +297,7 @@ func (s *Store) FinishRun(ctx context.Context, r Run) error {
 // ListRuns returns the newest runs, optionally for one topic.
 func (s *Store) ListRuns(ctx context.Context, topicID string, limit int) ([]Run, error) {
 	q := `SELECT id, topic_id, run_id, run_dir, started_at, ended_at, stop_reason, iterations, succeeded, failed,
-		input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, cost_usd, window_spent, commits FROM runs`
+		input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, cost_usd, window_spent, commits, model FROM runs`
 	var args []any
 	if topicID != "" {
 		q += ` WHERE topic_id = ?`
@@ -313,7 +316,7 @@ func (s *Store) ListRuns(ctx context.Context, topicID string, limit int) ([]Run,
 		var started, ended int64
 		var commits string
 		if err := rows.Scan(&r.ID, &r.TopicID, &r.RunID, &r.RunDir, &started, &ended, &r.StopReason, &r.Iterations, &r.Succeeded, &r.Failed,
-			&r.Tokens.Input, &r.Tokens.Output, &r.Tokens.CacheCreate, &r.Tokens.CacheRead, &r.CostUSD, &r.WindowSpent, &commits); err != nil {
+			&r.Tokens.Input, &r.Tokens.Output, &r.Tokens.CacheCreate, &r.Tokens.CacheRead, &r.CostUSD, &r.WindowSpent, &commits, &r.Model); err != nil {
 			return nil, err
 		}
 		r.StartedAt, r.EndedAt = fromMS(started), fromMS(ended)

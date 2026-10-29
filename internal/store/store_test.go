@@ -193,7 +193,7 @@ func TestRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now().Add(-time.Hour)
-	id, err := s.StartRun(ctx, Run{TopicID: "r", RunID: "run1", RunDir: "/d", StartedAt: start})
+	id, err := s.StartRun(ctx, Run{TopicID: "r", RunID: "run1", RunDir: "/d", StartedAt: start, Model: "sonnet"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +214,9 @@ func TestRuns(t *testing.T) {
 		t.Fatalf("runs = %+v", runs)
 	}
 	got := runs[1]
+	if got.Model != "sonnet" {
+		t.Errorf("model = %q", got.Model)
+	}
 	if got.StopReason != "done" || got.Iterations != 3 || got.Tokens.CacheRead != 4 || got.WindowSpent != 0.04 ||
 		len(got.Commits) != 2 || got.StartedAt.UnixMilli() != start.UnixMilli() {
 		t.Errorf("run = %+v", got)

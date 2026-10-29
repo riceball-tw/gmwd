@@ -117,7 +117,7 @@ Options:
 	}
 
 	startedAt := time.Now()
-	runRow, err := st.StartRun(ctx, store.Run{TopicID: t.ID, StartedAt: startedAt})
+	runRow, err := st.StartRun(ctx, store.Run{TopicID: t.ID, StartedAt: startedAt, Model: t.ModelOrDefault()})
 	if err != nil {
 		return err
 	}
