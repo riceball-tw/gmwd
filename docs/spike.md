@@ -147,3 +147,27 @@ after expiry anchors a full fresh window.
 - `/usage` text when no 5h window is active / on other plans.
 - Whether `--setting-sources project,local` keeps OAuth working and skips user hooks.
 - Statusline stdin fields (milestone 7).
+
+## 5. Unattended permissions (checked for milestone 2, haiku, scrubbed env)
+
+All runs: `--permission-mode dontAsk` (anything not pre-approved is denied, nobody is asked),
+`--setting-sources project,local --strict-mcp-config --no-session-persistence`, and a minimal env
+(`HOME USER LOGNAME PATH TMPDIR LANG`) — OAuth still works with that env.
+
+| Check | Result |
+|---|---|
+| `--allowedTools 'Write(./**)' 'Edit(./**)'`: write in cwd / outside | inside written; outside denied, listed in `result.permission_denials` |
+| Read / Glob / Grep with no rules: in cwd / outside | inside allowed; outside denied (cwd and `--add-dir` are readable by default) |
+| `--json-schema '{...}'` | validated object in `result.structured_output` |
+| Bash, `--settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true}}'`: write outside cwd | `operation not permitted` (writes allowed only in cwd and `$TMPDIR`) |
+| same, network (`curl https://example.com`) | blocked: `deny network-outbound example.com:443` |
+| same + `"allowUnsandboxedCommands":false`, no `Bash` in `--allowedTools`, model told to use `dangerouslyDisableSandbox` | sandboxed Bash auto-allowed; escape not possible, write still denied |
+
+So the runner never passes plain `Bash` in `--allowedTools` (that would pre-approve unsandboxed runs).
+
+Consequences for solve jobs:
+- In a worktree, `.git` points into the main repo, which is outside cwd → the model can't commit; gmwd commits.
+  Network is blocked, so `git push` can't work either.
+- Toolchain caches outside cwd (`~/Library/Caches/go-build`, npm, …) are not writable. Point them into the job's
+  tmp via env (`GOCACHE`, `npm_config_cache`, …) or allow per-topic extra write dirs / domains (later).
+- Sandboxed Bash can still *read* most of the disk; with network off it can't send it anywhere.
