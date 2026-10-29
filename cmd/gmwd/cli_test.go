@@ -410,3 +410,10 @@ func TestConfig(t *testing.T) {
 	}
 	contains(t, "unchanged after errors", mustRun(t, "config"), "max burn       70%", "idle mode      away")
 }
+
+func TestTUIWithoutDaemonExplains(t *testing.T) {
+	env(t)
+	if _, err := run(t, "tui"); !errors.Is(err, errNoDaemon) {
+		t.Errorf("err = %v", err)
+	}
+}

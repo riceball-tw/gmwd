@@ -12,6 +12,7 @@ import (
 const usageText = `gmwd — use leftover Claude quota on your backlog
 
 Usage:
+  gmwd                                open the TUI (needs the daemon)
   gmwd daemon                         run the daemon in the foreground
   gmwd install | uninstall            start/stop the daemon with launchd at login
   gmwd status [--json] [--refresh]    usage, reset times and daemon state
@@ -28,6 +29,7 @@ Usage:
 `
 
 var commands = map[string]func(args []string, out io.Writer) error{
+	"tui":       cmdTUI,
 	"daemon":    cmdDaemon,
 	"status":    cmdStatus,
 	"add":       cmdAdd,
@@ -42,11 +44,10 @@ var commands = map[string]func(args []string, out io.Writer) error{
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usageText)
-		os.Exit(2)
+	name := "tui"
+	if len(os.Args) >= 2 {
+		name = os.Args[1]
 	}
-	name := os.Args[1]
 	if name == "-h" || name == "--help" || name == "help" {
 		fmt.Print(usageText)
 		return
@@ -56,7 +57,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "gmwd: unknown command %q\n\n%s", name, usageText)
 		os.Exit(2)
 	}
-	if err := cmd(os.Args[2:], os.Stdout); err != nil {
+	var args []string
+	if len(os.Args) > 2 {
+		args = os.Args[2:]
+	}
+	if err := cmd(args, os.Stdout); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(2)
 		}
