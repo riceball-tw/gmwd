@@ -485,3 +485,50 @@ func TestReadTailStartsAtSection(t *testing.T) {
 		t.Errorf("missing file: %q %v", got, err)
 	}
 }
+
+func TestHooks(t *testing.T) {
+	reset := time.Now().Add(time.Hour).Truncate(10 * time.Minute).Unix()
+	step := func(u float64) fakeStep {
+		return fakeStep{Status: "progress", Summary: "more", Tokens: 90, RateLimit: &fakeRateLimit{Status: "allowed", FiveHour: u, SevenDay: 0.3, ResetsAt: reset}}
+	}
+	f := newFake(t, step(0.11), step(0.12), step(0.13), step(0.14))
+	var seen []float64
+	var iters []int
+	asked := 0
+	opts := Options{
+		OnUsage:     func(s usage.Snapshot) { seen = append(seen, s.FiveHour.Utilization) },
+		OnIteration: func(s Summary) { iters = append(iters, s.Iterations) },
+		ShouldStop: func() StopReason {
+			asked++
+			if asked == 3 { // asked before iterations 1, 2, 3
+				return StopUserActive
+			}
+			return ""
+		},
+	}
+	s, err := newRunner(t, f).Run(context.Background(), research("hooks"), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.StopReason != StopUserActive || s.Iterations != 2 || f.calls() != 2 || s.TopicStatus != topic.Queued {
+		t.Errorf("stop %q iterations %d calls %d status %q", s.StopReason, s.Iterations, f.calls(), s.TopicStatus)
+	}
+	if !slices.Equal(seen, []float64{0.11, 0.12}) {
+		t.Errorf("OnUsage saw %v", seen)
+	}
+	if !slices.Equal(iters, []int{1, 2}) {
+		t.Errorf("OnIteration saw %v", iters)
+	}
+}
+
+func TestShouldStopBeforeFirstIteration(t *testing.T) {
+	repo := gitRepo(t)
+	f := newFake(t, fakeStep{Status: "done", Summary: "x"})
+	s, err := newRunner(t, f).Run(context.Background(), solve("early", repo), Options{ShouldStop: func() StopReason { return StopPaused }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.StopReason != StopPaused || f.calls() != 0 || s.Iterations != 0 {
+		t.Errorf("stop %q calls %d", s.StopReason, f.calls())
+	}
+}

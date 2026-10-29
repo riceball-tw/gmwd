@@ -48,6 +48,9 @@ const (
 	StopRateLimited StopReason = "rate_limited"
 	StopFailures    StopReason = "failures"
 	StopCancelled   StopReason = "cancelled"
+	// Returned by Options.ShouldStop.
+	StopUserActive StopReason = "user_active"
+	StopPaused     StopReason = "paused"
 )
 
 // Runner runs topics. Home is gmwd's data dir (~/.gmwd).
@@ -66,6 +69,14 @@ type Options struct {
 	// the baseline for Budget.WindowPct; without it the first
 	// rate_limit_event is used.
 	Start *usage.Snapshot
+	// OnUsage gets every rate_limit_event as it arrives, so the caller's
+	// view of usage stays current while a job runs.
+	OnUsage func(usage.Snapshot)
+	// ShouldStop is asked before every iteration; a non-empty reason ends
+	// the run there (e.g. the user came back, or gmwd was paused).
+	ShouldStop func() StopReason
+	// OnIteration gets the running summary after every iteration.
+	OnIteration func(Summary)
 }
 
 // Summary is the outcome of a run.
@@ -152,10 +163,19 @@ func (r *Runner) Run(ctx context.Context, t topic.Topic, opts Options) (Summary,
 			s.StopReason = reason
 			break
 		}
+		if opts.ShouldStop != nil {
+			if reason := opts.ShouldStop(); reason != "" {
+				s.StopReason = reason
+				break
+			}
+		}
 		s.Iterations++
-		it, err := r.iterate(ctx, t, ws, b, win, &s)
+		it, err := r.iterate(ctx, t, ws, b, win, opts.OnUsage, &s)
 		if err != nil {
 			return r.finish(t, s), err
+		}
+		if opts.OnIteration != nil {
+			opts.OnIteration(s)
 		}
 		if it.reason != "" {
 			s.StopReason = it.reason
@@ -240,7 +260,7 @@ type iterResult struct {
 	reason   StopReason // set when the run must stop now
 }
 
-func (r *Runner) iterate(ctx context.Context, t topic.Topic, ws workspace, b Budget, win *windowTracker, s *Summary) (iterResult, error) {
+func (r *Runner) iterate(ctx context.Context, t topic.Topic, ws workspace, b Budget, win *windowTracker, onUsage func(usage.Snapshot), s *Summary) (iterResult, error) {
 	n := s.Iterations
 	notes, err := readTail(r.notesPath(t.ID), 12<<10)
 	if err != nil {
@@ -262,6 +282,9 @@ func (r *Runner) iterate(ctx context.Context, t topic.Topic, ws workspace, b Bud
 	var mu sync.Mutex
 	var killReason StopReason
 	res, runErr := r.Claude.Run(ictx, inv, logf, func(snap usage.Snapshot) {
+		if onUsage != nil {
+			onUsage(snap)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		win.observe(snap.FiveHour)
