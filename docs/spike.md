@@ -115,6 +115,9 @@ Current session: 6% used · resets Oct 30 at 1:20am (Asia/Taipei)
 Current week (all models): 29% used · resets Nov 1 at 6pm (Asia/Taipei)
 ```
 "Current session" = `five_hour`. The reset string has no year and uses the user's TZ; parse with care.
+It prints a minute early (1:19am / 5:59pm for exact 01:20:00 / 18:00:00 from `rate_limit_event`), so
+`internal/usage` rounds it to the nearest 10 minutes. ~2–3 s per call with
+`--no-session-persistence --setting-sources project,local --strict-mcp-config` (OAuth still works, no hooks).
 Other plans may show extra lines (e.g. a per-model weekly cap) — parse all `Current week (...)` lines and
 treat the max as binding. When no 5h window is active the format is unverified.
 
