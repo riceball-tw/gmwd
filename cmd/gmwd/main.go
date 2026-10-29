@@ -2,39 +2,82 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
 const usageText = `gmwd — use leftover Claude quota on your backlog
 
 Usage:
-  gmwd status [--json] [--no-probe]   current 5h / weekly usage and reset times
+  gmwd daemon                         run the daemon in the foreground
+  gmwd status [--json] [--refresh]    usage, reset times and daemon state
+  gmwd add --kind K --title T --prompt P [--repo DIR] [--priority 1-5] ...
+                                      queue a topic (research or solve)
+  gmwd ls [--json]                    list topics
+  gmwd rm ID                          delete a topic (keeps its files and branch)
+  gmwd pause [ID] | resume [ID]       pause/resume the daemon, or one topic
+  gmwd run ID                         run a topic now, in the foreground
   gmwd run --kind K --title T --prompt P [--repo DIR]
-                                      run a new topic in the foreground
-  gmwd run ID                         continue a topic
+                                      add a topic and run it now
 `
+
+var commands = map[string]func(args []string, out io.Writer) error{
+	"daemon": cmdDaemon,
+	"status": cmdStatus,
+	"add":    cmdAdd,
+	"ls":     cmdList,
+	"rm":     cmdRemove,
+	"pause":  func(args []string, out io.Writer) error { return cmdPause(args, out, true) },
+	"resume": func(args []string, out io.Writer) error { return cmdPause(args, out, false) },
+	"run":    cmdRun,
+}
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usageText)
 		os.Exit(2)
 	}
-	var err error
-	switch os.Args[1] {
-	case "status":
-		err = cmdStatus(os.Args[2:])
-	case "run":
-		err = cmdRun(os.Args[2:])
-	case "-h", "--help", "help":
+	name := os.Args[1]
+	if name == "-h" || name == "--help" || name == "help" {
 		fmt.Print(usageText)
 		return
-	default:
-		fmt.Fprintf(os.Stderr, "gmwd: unknown command %q\n\n%s", os.Args[1], usageText)
+	}
+	cmd, ok := commands[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "gmwd: unknown command %q\n\n%s", name, usageText)
 		os.Exit(2)
 	}
-	if err != nil {
+	if err := cmd(os.Args[2:], os.Stdout); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(2)
+		}
 		fmt.Fprintln(os.Stderr, "gmwd:", err)
 		os.Exit(1)
+	}
+}
+
+// newFlags returns a FlagSet that reports errors instead of exiting.
+func newFlags(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	return fs
+}
+
+// parseArgs parses flags that may come before or after positional
+// arguments (`gmwd run ID --iterations 3`) and returns the positionals.
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return pos, nil
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
 	}
 }
