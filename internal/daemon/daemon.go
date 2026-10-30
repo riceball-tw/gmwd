@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"gmwd/internal/calib"
@@ -164,18 +163,13 @@ func (d *Daemon) wake() {
 	}
 }
 
-func processAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-// lock takes an exclusive flock on path and writes our pid into it.
+// lock takes an exclusive lock on path and writes our pid into it.
 func lock(path string) (unlock func(), err error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFile(f); err != nil {
 		b, _ := os.ReadFile(path)
 		f.Close()
 		if pid := strings.TrimSpace(string(b)); pid != "" {
@@ -186,7 +180,7 @@ func lock(path string) (unlock func(), err error) {
 	f.Truncate(0)
 	f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	return func() {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		unlockFile(f)
 		f.Close()
 	}, nil
 }
