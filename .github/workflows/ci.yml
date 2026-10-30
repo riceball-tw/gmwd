@@ -57,6 +57,8 @@ jobs:
           - { goos: darwin, goarch: amd64 }
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
     steps:
       - uses: actions/checkout@v7
 
@@ -77,11 +79,20 @@ jobs:
             version="dev-${GITHUB_SHA::7}"
           fi
           name="gmwd-$GOOS-$GOARCH"
+          bin=gmwd
+          if [ "$GOOS" = windows ]; then bin=gmwd.exe; fi
           mkdir -p "dist/$name"
-          go build -trimpath -ldflags "-s -w -X main.version=$version" -o "dist/$name/gmwd" ./cmd/gmwd
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o "dist/$name/$bin" ./cmd/gmwd
           cp README.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          if [ "$GOOS" = windows ]; then
+            archive="$name.zip"
+            (cd dist && zip -qr "$archive" "$name")
+          else
+            archive="$name.tar.gz"
+            tar -C dist -czf "dist/$archive" "$name"
+          fi
           echo "NAME=$name" >> "$GITHUB_ENV"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - name: Smoke test
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
@@ -92,7 +103,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.NAME }}
-          path: dist/${{ env.NAME }}.tar.gz
+          path: dist/${{ env.ARCHIVE }}
           if-no-files-found: error
 
   release:
@@ -113,14 +124,14 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum gmwd-*.tar.gz > SHA256SUMS
+          sha256sum gmwd-*.tar.gz gmwd-*.zip > SHA256SUMS
           cat SHA256SUMS
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/gmwd-*.tar.gz dist/SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" dist/gmwd-*.tar.gz dist/gmwd-*.zip dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \

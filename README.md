@@ -28,7 +28,7 @@ gmwd install      # start the daemon now and at every login (launchd)
 
 To try it without launchd, run `gmwd daemon` in a terminal instead.
 
-Or download a prebuilt binary (darwin and linux, arm64 and amd64) from [Releases](https://github.com/riceball-tw/gmwd/releases), check it against `SHA256SUMS`, and put `gmwd` on your `PATH`. The binaries aren't signed, so on macOS clear the download quarantine first: `xattr -d com.apple.quarantine gmwd`.
+Or download a prebuilt binary (darwin, linux and windows, arm64 and amd64) from [Releases](https://github.com/riceball-tw/gmwd/releases), check it against `SHA256SUMS`, and put `gmwd` on your `PATH`. The binaries aren't signed, so on macOS clear the download quarantine first: `xattr -d com.apple.quarantine gmwd`.
 
 ## Quick start
 
@@ -141,6 +141,6 @@ Code layout: `cmd/gmwd` holds the CLI. Under `internal/` are `usage` (reading qu
 ## Limits
 
 - One job at a time.
-- macOS only for now (launchd, `ioreg` and `osascript` are macOS tools).
+- Built for macOS. Linux and Windows binaries run the daemon, TUI and CLI, but `gmwd install` (launchd), away-mode idle detection (`ioreg`) and notifications (`osascript`) are macOS-only; start `gmwd daemon` yourself there.
 - Toolchain caches are redirected into the sandbox for Go and npm (and anything using `XDG_CACHE_HOME`). Other toolchains may fail to write their caches.
 - Claude's limits and Claude Code's output formats can change. If they do, `gmwd status` is the first thing to check.
