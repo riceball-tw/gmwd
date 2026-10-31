@@ -1,60 +1,129 @@
-# gmwd
+<p align="center">Your Claude quota resets whether you use it or not, so why not just gmwd?</p>
+<h1 align="center">gmwd</h1>
+
+<p align="center">
+  <a href="https://github.com/riceball-tw/gmwd/actions/workflows/ci.yml"
+    ><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/riceball-tw/gmwd/ci.yml?style=flat-square&label=ci"
+  /></a>
+  <a href="https://github.com/riceball-tw/gmwd/releases"
+    ><img alt="Release" src="https://img.shields.io/github/v/release/riceball-tw/gmwd?style=flat-square"
+  /></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square" />
+</p>
 
 Use the Claude subscription quota you'd otherwise lose.
 
-Claude plans have a rolling 5-hour limit and a weekly limit, and most weeks end with quota unused. gmwd keeps a backlog of **topics** (things to research, bugs to fix) and works through them with Claude Code while you're not using it. It stays within a share of your weekly limit that you choose, and always leaves part of each 5-hour window for you.
+Claude plans have a rolling 5-hour limit and a weekly limit, and most weeks end with quota unused. gmwd keeps a backlog of **topics** (things to research, bugs to fix) and works through them with Claude Code while you're not using it. You come back to reports and branches to review.
 
-- **research** topics produce a `report.md` with sources.
-- **solve** topics produce commits on a `gmwd/<id>` branch in a git worktree. Nothing is pushed.
-- Each morning there's a **digest** of what was done and what to review.
+- **Spends only spare quota** - stays under a share of your weekly limit that you choose, and always leaves part of each 5-hour window for you
+- **Waits for you to step away** - starts work only after you've been idle for 10 minutes, and stops when you come back
+- **Research topics** produce a `report.md` with sources
+- **Solve topics** produce commits on a `gmwd/<id>` branch in a git worktree; nothing is pushed
+- **Morning digest** - a daily summary of what was done and what to review
+- **Your subscription, no API keys** - runs the official `claude` CLI, with no permission bypass
 
-It is a background daemon plus a terminal UI and CLI. It runs the official `claude` CLI on your own subscription and never uses API keys.
-
-## Requirements
-
-- macOS (the daemon installs as a launchd agent; the rest is portable Go)
-- Go 1.27+
-- [Claude Code](https://claude.com/claude-code), logged in with a Pro or Max subscription (`claude` on your `PATH`)
-- `git`
-
-## Install
+## Quick Start
 
 ```sh
-go build -o ~/bin/gmwd ./cmd/gmwd
-gmwd install      # start the daemon now and at every login (launchd)
+gmwd daemon &                        # start the background worker (or `gmwd install` on macOS)
+gmwd status                          # your 5h and weekly usage, as Claude Code reports it
 ```
 
-`gmwd install` points launchd at that exact binary. After rebuilding, run `gmwd install` again to reload it. `gmwd uninstall` stops the daemon and removes it, but keeps your topics.
-
-To try it without launchd, run `gmwd daemon` in a terminal instead.
-
-Or download a prebuilt binary (darwin, linux and windows, arm64 and amd64) from [Releases](https://github.com/riceball-tw/gmwd/releases), check it against `SHA256SUMS`, and put `gmwd` on your `PATH`. The binaries aren't signed, so on macOS clear the download quarantine first: `xattr -d com.apple.quarantine gmwd`.
-
-## Quick start
-
 ```sh
-gmwd status                          # your 5h and weekly usage, as Claude Code reports it
-
+# Queue a research topic
 gmwd add --kind research --title "Pure-Go SQLite drivers" \
   --prompt "Compare pure-Go SQLite drivers: maturity, performance, license."
+```
 
+```sh
+# Queue a bug fix in one of your repos, at higher priority
 gmwd add --kind solve --title "Fix flaky auth tests" \
   --prompt "TestLogin fails about 1 in 10 runs. Find the cause and fix it." \
   --repo ~/code/myapp --priority 4
-
-gmwd                                 # open the TUI
 ```
 
-The daemon starts a topic once you've been idle for 10 minutes and the budget allows it. Later:
-
 ```sh
-gmwd digest                          # what happened today, what to review
+# Walk away. Later, see what happened and review the branch
+gmwd digest
 git -C ~/code/myapp log --stat main..gmwd/fix-flaky-auth-tests
 ```
 
-## How it decides when to work
+Run `gmwd` with no arguments to open the TUI instead.
 
-All three must hold:
+## Install
+
+You need [Claude Code](https://claude.com/claude-code) logged in with a Pro or Max subscription (`claude` on your `PATH`), and `git`.
+
+**Prebuilt binary**
+
+Download the archive for your OS and CPU (darwin, linux or windows; arm64 or amd64) from [Releases](https://github.com/riceball-tw/gmwd/releases), check it against `SHA256SUMS`, and put `gmwd` on your `PATH`. The binaries aren't signed, so on macOS clear the download quarantine first:
+
+```sh
+xattr -d com.apple.quarantine gmwd
+```
+
+**From source** (Go 1.27+)
+
+```sh
+git clone https://github.com/riceball-tw/gmwd.git
+cd gmwd
+go build -o ~/bin/gmwd ./cmd/gmwd
+```
+
+**Run the daemon**
+
+```sh
+gmwd install      # macOS: start the daemon now and at every login (launchd)
+gmwd daemon       # any OS: run it in a terminal (or under your own service manager)
+```
+
+`gmwd install` points launchd at that exact binary, so run it again after rebuilding. `gmwd uninstall` stops the daemon and removes it, but keeps your topics.
+
+### OS support
+
+macOS gets the full experience. Linux and Windows run the same daemon, TUI and CLI, but a few macOS-only conveniences are missing.
+
+| Feature | macOS | Linux / Windows |
+|---|---|---|
+| Daemon, TUI, CLI, research and solve jobs | yes | yes |
+| `gmwd install` (start at login via launchd) | yes | no: run `gmwd daemon` yourself |
+| `--idle-mode away` (keyboard/mouse idle check) | yes | no: use the default `not-using-claude` |
+| Desktop notifications | yes | no |
+
+## How It Works
+
+```
+          ┌──────────────────────────────┐
+          │ daemon checks every tick     │◄─────────────────────┐
+          └──────────────┬───────────────┘                      │
+                         ▼                                      │
+          ┌──────────────────────────────┐   no                 │
+          │ idle? budget? not paused?    ├──────────────────────┤
+          │ topic queued?                │                      │
+          └──────────────┬───────────────┘                      │
+                     yes ▼                                      │
+          ┌──────────────────────────────┐                      │
+          │ pick highest priority topic  │                      │
+          └──────────────┬───────────────┘                      │
+                         ▼                                      │
+          ┌──────────────────────────────┐                      │
+          │ one `claude -p` iteration    │◄──────────┐          │
+          │ (sees notes.md from before)  │           │          │
+          └──────────────┬───────────────┘           │          │
+                         ▼                           │          │
+          ┌──────────────────────────────┐           │          │
+          │ success: commit, add notes   │           │          │
+          │ failure: reset worktree      │           │          │
+          └──────────────┬───────────────┘           │          │
+                         ▼                           │          │
+          ┌──────────────────────────────┐   no      │          │
+          │ you're back, paused, budget  ├───────────┘          │
+          │ spent, done, or 3 failures?  │                      │
+          └──────────────┬───────────────┘                      │
+                     yes └──────────────────────────────────────┘
+```
+
+A job starts only when all three hold:
 
 1. **You're idle.** By default that means no interactive Claude Code session was written to in the last 10 minutes. gmwd's own runs don't count. With `--idle-mode away` it also waits until you haven't touched the keyboard or mouse for 10 minutes.
 2. **There's budget.** The **max burn** slider (default 90%) is how full gmwd may fill your *week*. The headroom below it is spread evenly across the 5-hour windows left before the weekly reset. Near the end of a window, gmwd may use more, because that window's quota expires anyway. It never goes into the **reserve** (default 15% of every 5-hour window) and never past the slider.
@@ -64,9 +133,7 @@ Usage comes straight from Claude Code (`claude -p /usage`, which costs nothing, 
 
 A job runs in iterations. Each one is a single `claude -p` call that sees notes from the previous ones. The job stops at the end of an iteration when you come back, when you pause gmwd, when its budget is spent, when the topic reports it's done, or after 3 failures in a row. If you reach your reserve mid-iteration, the iteration is stopped right away and its changes are discarded.
 
-## Using it
-
-### TUI
+## TUI
 
 Run `gmwd` with no arguments. Quitting the TUI leaves the daemon running.
 
@@ -77,26 +144,50 @@ Run `gmwd` with no arguments. Quitting the TUI leaves the daemon running.
 | 3 Jobs | recent runs and why each stopped, live log |
 | 4 Digest | `←/→` previous/next day |
 
-These keys work on every screen: `tab` or `1`–`4` to switch screens, `space` to pause/resume gmwd, `?` for help, `q` to quit.
+On every screen: `tab` or `1`–`4` to switch screens, `space` to pause/resume gmwd, `?` for help, `q` to quit.
 
-### CLI
+## CLI Reference
 
-```
-gmwd status [--refresh]          usage, resets, daemon state, calibration
-gmwd add --kind research|solve --title T --prompt P [--repo DIR]
-         [--priority 1-5] [--model sonnet|opus|haiku] [--done-when TEXT]
-gmwd ls | rm ID
-gmwd pause [ID] | resume [ID]    the whole daemon, or one topic
-gmwd run ID [--iterations N] [--max-tokens N]
-                                 run a topic now in the foreground (ignores idle)
-gmwd digest [--date YYYY-MM-DD] [--list]
-gmwd config [--max-burn N] [--reserve N] [--idle-mode not-using-claude|away]
-            [--quiet-minutes N] [--notify on|off]
-```
+| Command | Description |
+|---|---|
+| `gmwd` | Open the TUI |
+| `gmwd daemon` | Run the daemon in the foreground |
+| `gmwd install` / `uninstall` | Start the daemon at login via launchd, or remove it (macOS) |
+| `gmwd status [--refresh]` | Usage, resets, daemon state, calibration |
+| `gmwd add --kind research\|solve --title T --prompt P` | Queue a topic (`--prompt -` reads stdin) |
+| `gmwd ls` / `rm ID` | List or remove topics |
+| `gmwd pause [ID]` / `resume [ID]` | Pause the whole daemon, or one topic |
+| `gmwd run ID` | Run a topic now in the foreground, ignoring idle |
+| `gmwd digest [--date YYYY-MM-DD] [--list]` | Show a day's digest |
+| `gmwd config [flags]` | Change settings |
+| `gmwd version` | Show version |
 
-`--prompt -` reads the prompt from stdin. `--quiet-minutes 0` makes gmwd run whenever there's budget, without waiting for you to be idle.
+### `add` flags
 
-Jobs use **Sonnet** by default. Pick Opus per topic with `--model opus`.
+| Flag | Description | Default |
+|---|---|---|
+| `--repo DIR` | solve: the git repo to work in; research: optional read-only context dir | |
+| `--priority N` | 1 (low) to 5 (high) | `3` |
+| `--model M` | `sonnet`, `opus` or `haiku` | `sonnet` |
+| `--done-when TEXT` | Natural-language stop condition | |
+| `--topic-max-tokens N` | Token cap for each run of this topic | none |
+
+### `config` flags
+
+| Flag | Description | Default |
+|---|---|---|
+| `--max-burn N` | Fill the week up to this % of the weekly cap | `90` |
+| `--reserve N` | % of every 5h window always left for you | `15` |
+| `--idle-mode M` | `not-using-claude`, or `away` (also no keyboard/mouse input, macOS) | `not-using-claude` |
+| `--quiet-minutes N` | How long you must be idle first; `0` runs whenever there's budget | `10` |
+| `--notify on\|off` | macOS notification when a run leaves something to review | `off` |
+
+### `run` flags
+
+| Flag | Description | Default |
+|---|---|---|
+| `--iterations N` | Max iterations this run | `10` |
+| `--max-tokens N` | Max tokens this run | none |
 
 ## Safety
 
@@ -124,6 +215,13 @@ Everything lives in `~/.gmwd/` (override with `GMWD_HOME`):
 | `worktrees/<id>/` | solve worktrees |
 | `digest/YYYY-MM-DD.md` | daily digests |
 
+## Limits
+
+- One job at a time.
+- Built for macOS. See [OS support](#os-support) for what Linux and Windows lack.
+- Toolchain caches are redirected into the sandbox for Go and npm (and anything using `XDG_CACHE_HOME`). Other toolchains may fail to write their caches.
+- Claude's limits and Claude Code's output formats can change. If they do, `gmwd status` is the first thing to check.
+
 ## Development
 
 ```sh
@@ -137,10 +235,3 @@ CI (`.github/workflows/ci.yml`) runs gofmt, `go vet` and `go test -race` on macO
 - `plan.md` is the design.
 
 Code layout: `cmd/gmwd` holds the CLI. Under `internal/` are `usage` (reading quota), `pacer` (budget), `activity` (idle check), `scheduler`, `runner` (the `claude -p` loop and git), `daemon`, `rpc`, `store`, `digest`, `calib`, `tui`, `launchd`.
-
-## Limits
-
-- One job at a time.
-- Built for macOS. Linux and Windows binaries run the daemon, TUI and CLI, but `gmwd install` (launchd), away-mode idle detection (`ioreg`) and notifications (`osascript`) are macOS-only; start `gmwd daemon` yourself there.
-- Toolchain caches are redirected into the sandbox for Go and npm (and anything using `XDG_CACHE_HOME`). Other toolchains may fail to write their caches.
-- Claude's limits and Claude Code's output formats can change. If they do, `gmwd status` is the first thing to check.
