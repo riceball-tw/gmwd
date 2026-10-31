@@ -118,10 +118,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.srv = rpc.NewServer()
 	d.register()
 
-	pollCtx, stopPoll := context.WithCancel(ctx)
-	defer stopPoll()
-	go d.poll(pollCtx)
-
 	schedDone := make(chan struct{})
 	if d.Runner != nil {
 		d.sched = &scheduler.Scheduler{
@@ -141,6 +137,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	} else {
 		close(schedDone)
 	}
+
+	// Polling wakes the scheduler, so it starts once d.sched is set.
+	pollCtx, stopPoll := context.WithCancel(ctx)
+	defer stopPoll()
+	go d.poll(pollCtx)
 
 	d.logf("daemon started (pid %d), socket %s", os.Getpid(), sock)
 	err = d.srv.Serve(ctx, ln)
